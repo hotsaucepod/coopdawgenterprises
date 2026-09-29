@@ -85,6 +85,9 @@ export class Game {
   private currentPanel: 'order' | 'build' | 'elevator' | null = null;
   private water: THREE.Object3D | null = null;
   private time = 0;
+  private fpsSamples = 0;
+  private fpsTime = 0;
+  private fpsChecked = false;
 
   constructor(container: HTMLElement) {
     this.r3d = new Renderer3D(container);
@@ -94,6 +97,9 @@ export class Game {
     ui.onButton('build', () => this.openBuildPanel());
     ui.onButton('elevator', () => this.openElevatorPanel());
     (window as unknown as { __mallTycoon?: Game }).__mallTycoon = this;
+    let lowFx = false;
+    try { lowFx = location.search.includes('low') || localStorage.getItem('mall-tycoon-lowfx') === '1'; } catch { /* ignore */ }
+    if (lowFx) { this.r3d.setQuality('low'); this.fpsChecked = true; }
     requestAnimationFrame((t) => this.frame(t));
   }
 
@@ -503,6 +509,7 @@ export class Game {
     if (this.fs.purchased.includes(f.id)) return;
     this.fs.purchased.push(f.id);
     this.placeFixture(f, true);
+    this.unstickPlayer();
     this.floatText(f.name + '!', this.player.group.position, '#ffd166');
     this.refreshHud();
     this.checkFloorComplete();
@@ -738,10 +745,24 @@ export class Game {
   // ---------------------------------------------------------------- frame loop
   private frame(t: number): void {
     requestAnimationFrame((n) => this.frame(n));
-    const dt = Math.min(100, this.lastTime ? t - this.lastTime : 16);
+    const raw = this.lastTime ? t - this.lastTime : 16;
+    const dt = Math.min(100, raw);
     this.lastTime = t;
     if (!this.floor) return;
     this.time += dt;
+    // after a few seconds of play, drop to low quality if this device can't keep up
+    if (!this.fpsChecked) {
+      this.fpsSamples++;
+      this.fpsTime += raw; // wall-clock frame time
+      if (this.fpsTime > 4000 && this.fpsSamples > 10) {
+        this.fpsChecked = true;
+        const fps = this.fpsSamples / (this.fpsTime / 1000);
+        if (fps < 24) {
+          this.r3d.setQuality('low');
+          try { localStorage.setItem('mall-tycoon-lowfx', '1'); } catch { /* ignore */ }
+        }
+      }
+    }
     this.update(dt);
     this.r3d.follow(this.player.group.position.x, this.player.group.position.z, dt / 1000);
     this.r3d.render();
@@ -790,6 +811,7 @@ export class Game {
   }
 
   private updatePlayer(dt: number): void {
+    this.unstickPlayer();
     const speed = SPEED_BY_LEVEL[this.save.upgrades.speed];
     const d = this.input.direction();
     const pos = this.player.group.position;
@@ -820,6 +842,41 @@ export class Game {
 
   private playerTile(): Pt {
     return { col: Math.floor(this.player.group.position.x), row: Math.floor(this.player.group.position.z) };
+  }
+
+  // If something solid appeared where the player stands (a freshly bought counter or shelf), step out to the nearest free tile.
+  private unstickPlayer(): void {
+    const pos = this.player.group.position;
+    const overlaps = (x: number, z: number): boolean => {
+      const minC = Math.floor(x - PLAYER_R);
+      const maxC = Math.floor(x + PLAYER_R);
+      const minR = Math.floor(z - PLAYER_R);
+      const maxR = Math.floor(z + PLAYER_R);
+      for (let r = minR; r <= maxR; r++) for (let c = minC; c <= maxC; c++) if (this.playerSolid.has(key(c, r))) return true;
+      return false;
+    };
+    if (!overlaps(pos.x, pos.z)) return;
+    const t = this.playerTile();
+    for (let ring = 1; ring <= 6; ring++) {
+      let best: { x: number; z: number; d: number } | null = null;
+      for (let dr = -ring; dr <= ring; dr++) for (let dc = -ring; dc <= ring; dc++) {
+        if (Math.max(Math.abs(dr), Math.abs(dc)) !== ring) continue;
+        const c = t.col + dc;
+        const r = t.row + dr;
+        if (c < 0 || r < 0 || c >= COLS || r >= ROWS) continue;
+        if (this.playerSolid.has(key(c, r))) continue;
+        const x = c + 0.5;
+        const z = r + 0.5;
+        if (overlaps(x, z)) continue;
+        const d = Math.hypot(x - pos.x, z - pos.z) + (dr > 0 ? 0 : 0.6); // prefer stepping toward the front (down-screen)
+        if (!best || d < best.d) best = { x, z, d };
+      }
+      if (best) {
+        pos.x = best.x;
+        pos.z = best.z;
+        return;
+      }
+    }
   }
 
   private updateInteractions(dt: number): void {

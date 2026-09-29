@@ -20,6 +20,7 @@ export class Renderer3D {
   private bloom: UnrealBloomPass | null = null;
   private ao: GTAOPass | null = null;
   readonly isMobile: boolean;
+  quality: 'high' | 'low' = 'high';
 
   constructor(private container: HTMLElement) {
     const isMobile = /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent);
@@ -128,8 +129,26 @@ export class Renderer3D {
     return { x: (p.x + 1) / 2 * this.container.clientWidth, y: (1 - p.y) / 2 * this.container.clientHeight };
   }
 
+  // Low quality: no shadows, no post-processing, half the pixels. Used automatically when frames get slow.
+  setQuality(q: 'high' | 'low'): void {
+    if (q === this.quality) return;
+    this.quality = q;
+    const low = q === 'low';
+    this.renderer.shadowMap.enabled = !low;
+    this.sun.castShadow = !low;
+    this.renderer.setPixelRatio(low ? 1 : Math.min(window.devicePixelRatio, 2));
+    this.scene.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (m.material) {
+        const mats = Array.isArray(m.material) ? m.material : [m.material];
+        for (const mm of mats) mm.needsUpdate = true;
+      }
+    });
+    this.resize();
+  }
+
   render(): void {
-    if (this.composer) this.composer.render();
+    if (this.composer && this.quality === 'high') this.composer.render();
     else this.renderer.render(this.scene, this.camera);
   }
 }
