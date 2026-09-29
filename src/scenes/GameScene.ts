@@ -287,11 +287,6 @@ export class GameScene extends Phaser.Scene {
         this.add.image(r.x + i * TILE, r.y - TILE, `cashier_mat_${this.floor.id}`).setOrigin(0).setDepth(0.2);
       }
       if (animate) this.pop(sprite);
-      if (f.kind === 'counter') {
-        this.add.text(r.x + r.w / 2, r.y - TILE - 6, 'Stand here to ring up customers', {
-          fontSize: '9px', color: '#ffffff', backgroundColor: '#00000066', padding: { x: 4, y: 2 },
-        }).setOrigin(0.5, 1).setDepth(0.3);
-      }
     } else if (f.kind === 'cashier') {
       const x = (COUNTER_1.col + 1) * TILE + TILE / 2;
       const y = (COUNTER_1.row - 1) * TILE + TILE / 2 + 8;
@@ -870,7 +865,7 @@ export class GameScene extends Phaser.Scene {
 
     // crates: pick up
     for (const c of this.crates.values()) {
-      if (!this.near(c, 10)) continue;
+      if (!this.near(c, 22)) continue;
       const have = this.carrying?.count ?? 0;
       if (have >= carryCap) continue;
       if (this.carrying && this.carrying.productId !== c.productId) continue;
@@ -888,7 +883,7 @@ export class GameScene extends Phaser.Scene {
     if (this.carrying) {
       for (const s of this.shelves.values()) {
         if (s.def.productId !== this.carrying.productId) continue;
-        if (!this.near(s, 12)) continue;
+        if (!this.near(s, 22)) continue;
         if (this.putOnShelf(s.def.id, this.carrying.productId)) {
           this.carrying.count -= 1;
           const img = this.carried.pop();
@@ -911,7 +906,8 @@ export class GameScene extends Phaser.Scene {
   private updateCustomers(dt: number): void {
     const hasCounter = this.fs.purchased.includes('counter');
     const maxCustomers = 6 + this.registerCount() * 2;
-    if (hasCounter && this.shelves.size > 0 && this.customers.length < maxCustomers) {
+    const anyStock = [...this.shelves.keys()].some((id) => this.shelfStock(id) > 0);
+    if (hasCounter && anyStock && this.customers.length < maxCustomers) {
       this.spawnTimer -= dt;
       if (this.spawnTimer <= 0) {
         this.spawnTimer = this.spawnInterval() * (0.7 + Math.random() * 0.6);
@@ -983,7 +979,7 @@ export class GameScene extends Phaser.Scene {
       const p = productById(this.floor, this.carrying.productId);
       hint = `Carrying ${this.carrying.count} ${p.name} · walk to the ${p.name} shelf`;
     } else if (waiting > 0 && !cashierHired && !this.playerAtCounter()) hint = `${waiting} customer${waiting > 1 ? 's' : ''} waiting · stand behind the counter!`;
-    else if ([...this.crates.values()].some((c) => this.crateStock(c.productId) > 0 && !this.shelfFullFor(c.productId))) hint = 'Grab items from the crates in the storage room (top)';
+    else if (!this.stocker && [...this.crates.values()].some((c) => this.crateStock(c.productId) > 0 && !this.shelfFullFor(c.productId))) hint = 'Grab items from the crates in the storage room (top)';
     else if ([...this.shelves.values()].every((s) => this.shelfStock(s.def.id) === 0)) hint = 'Shelves are empty · tap Order to buy stock';
     else if (this.fs.completed && this.save.unlockedFloors.length > 1 && !this.save.won) hint = 'Floor complete! Step into the elevator (bottom right)';
     ui.setHint(hint);
