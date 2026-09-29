@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
 import { COLS, ROWS, FloorDef, ProductDef, ELEVATOR, ENTRANCE } from '../data/floors';
 import { MALL_MAP } from '../data/mallMap';
 import { makeTextSprite } from './text';
@@ -8,30 +9,69 @@ import { makeTextSprite } from './text';
 
 export const WALL_H = 2.4;
 
-const matCache = new Map<string, THREE.MeshStandardMaterial>();
-export function mat(color: number, opts: { roughness?: number; metalness?: number; flat?: boolean; transparent?: boolean; opacity?: number; emissive?: number } = {}): THREE.MeshStandardMaterial {
+// Glossy toy plastic: smooth shading, a little clearcoat, reflections from the environment map.
+const matCache = new Map<string, THREE.MeshPhysicalMaterial>();
+export function mat(color: number, opts: { roughness?: number; metalness?: number; flat?: boolean; transparent?: boolean; opacity?: number; emissive?: number; clearcoat?: number } = {}): THREE.MeshPhysicalMaterial {
   const key = JSON.stringify([color, opts]);
   let m = matCache.get(key);
   if (!m) {
-    m = new THREE.MeshStandardMaterial({
+    m = new THREE.MeshPhysicalMaterial({
       color,
-      roughness: opts.roughness ?? 0.85,
+      roughness: opts.roughness ?? 0.42,
       metalness: opts.metalness ?? 0.0,
-      flatShading: opts.flat ?? true,
+      clearcoat: opts.clearcoat ?? 0.35,
+      clearcoatRoughness: 0.35,
+      flatShading: false,
       transparent: opts.transparent ?? false,
       opacity: opts.opacity ?? 1,
       emissive: opts.emissive ?? 0x000000,
+      emissiveIntensity: opts.emissive ? 0.9 : 1,
+      envMapIntensity: 0.7,
     });
     matCache.set(key, m);
   }
   return m;
 }
 
+// Rounded block, the basic building unit of everything in the mall.
+export function roundedBox(w: number, h: number, d: number, radius?: number): THREE.BufferGeometry {
+  const r = radius ?? Math.min(0.12, Math.min(w, h, d) * 0.3);
+  return new RoundedBoxGeometry(w, h, d, 3, r);
+}
+
 export function box(w: number, h: number, d: number, color: number, opts?: Parameters<typeof mat>[1]): THREE.Mesh {
-  const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat(color, opts));
+  const m = new THREE.Mesh(roundedBox(w, h, d), mat(color, opts));
   m.castShadow = true;
   m.receiveShadow = true;
   return m;
+}
+
+// A floor tile texture: soft rounded tile with a light grout line, so floors read as real tiles.
+const floorTexCache = new Map<string, THREE.CanvasTexture>();
+export function floorTexture(color: number, grout: number): THREE.CanvasTexture {
+  const key = color + ':' + grout;
+  let t = floorTexCache.get(key);
+  if (t) return t;
+  const c = document.createElement('canvas');
+  c.width = 128;
+  c.height = 128;
+  const ctx = c.getContext('2d')!;
+  ctx.fillStyle = '#' + grout.toString(16).padStart(6, '0');
+  ctx.fillRect(0, 0, 128, 128);
+  ctx.fillStyle = '#' + color.toString(16).padStart(6, '0');
+  ctx.beginPath();
+  ctx.roundRect(3, 3, 122, 122, 10);
+  ctx.fill();
+  const g = ctx.createLinearGradient(0, 0, 128, 128);
+  g.addColorStop(0, 'rgba(255,255,255,0.10)');
+  g.addColorStop(1, 'rgba(0,0,0,0.06)');
+  ctx.fillStyle = g;
+  ctx.fill();
+  t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.anisotropy = 4;
+  floorTexCache.set(key, t);
+  return t;
 }
 
 export function tileX(col: number): number { return col + 0.5; }
@@ -57,16 +97,16 @@ export function buildWorld(floor: FloorDef): THREE.Group {
   const g = new THREE.Group();
 
   // the ground the whole mall sits on, and a tall backdrop so the camera never sees the void
-  const ground = new THREE.Mesh(new THREE.PlaneGeometry(400, 400), mat(0x232733, { flat: false, roughness: 1 }));
+  const ground = new THREE.Mesh(new THREE.PlaneGeometry(400, 400), mat(0x9fd3a6, { roughness: 0.9, clearcoat: 0 }));
   ground.rotation.x = -Math.PI / 2;
   ground.position.set(COLS / 2, -0.05, ROWS / 2);
   ground.receiveShadow = true;
   g.add(ground);
-  const backdrop = box(COLS + 40, WALL_H * 2.2, 6, shade(floor.wallColor, 0.55));
+  const backdrop = box(COLS + 40, WALL_H * 2.2, 6, shade(floor.wallColor, 0.85));
   backdrop.position.set(COLS / 2, WALL_H * 1.1, -3);
   g.add(backdrop);
   for (const x of [-6, COLS + 6]) {
-    const side = box(6, WALL_H * 2.2, ROWS + 40, shade(floor.wallColor, 0.55));
+    const side = box(6, WALL_H * 2.2, ROWS + 40, shade(floor.wallColor, 0.85));
     side.position.set(x, WALL_H * 1.1, ROWS / 2);
     g.add(side);
   }
@@ -82,8 +122,8 @@ export function buildWorld(floor: FloorDef): THREE.Group {
   };
   const wallGeos: THREE.BufferGeometry[] = [];
   const roofGeos: THREE.BufferGeometry[] = [];
-  const concourseA = 0xd9d3c7;
-  const concourseB = 0xcfc8ba;
+  const concourseA = 0xecdcc6;
+  const concourseB = 0xdfcdb4;
   for (let r = 0; r < ROWS; r++) {
     for (let c = 0; c < COLS; c++) {
       const ch = tileAt(c, r);
@@ -95,7 +135,7 @@ export function buildWorld(floor: FloorDef): THREE.Group {
         // only draw wall blocks that touch something you can see
         const neighbours = [tileAt(c + 1, r), tileAt(c - 1, r), tileAt(c, r + 1), tileAt(c, r - 1)];
         if (neighbours.every((n) => n === '#' || n === 'L')) continue;
-        const geo = new THREE.BoxGeometry(1, WALL_H, 1);
+        const geo = roundedBox(1, WALL_H, 1, 0.1);
         geo.translate(tileX(c), WALL_H / 2, tileZ(r));
         wallGeos.push(geo);
         continue;
@@ -118,18 +158,39 @@ export function buildWorld(floor: FloorDef): THREE.Group {
   }
   for (const [color, geos] of buckets) {
     const merged = mergeGeometries(geos, false)!;
-    const mesh = new THREE.Mesh(merged, mat(color, { flat: false, roughness: 0.95 }));
+    const m = new THREE.MeshPhysicalMaterial({ map: floorTexture(color, shade(color, 0.78)), roughness: 0.5, clearcoat: 0.3, clearcoatRoughness: 0.4, envMapIntensity: 0.35 });
+    const mesh = new THREE.Mesh(merged, m);
     mesh.receiveShadow = true;
     g.add(mesh);
   }
   if (wallGeos.length) {
-    const walls = new THREE.Mesh(mergeGeometries(wallGeos, false)!, mat(floor.wallColor, { roughness: 0.9 }));
+    const walls = new THREE.Mesh(mergeGeometries(wallGeos, false)!, mat(floor.wallColor, { roughness: 0.5 }));
     walls.castShadow = true;
     walls.receiveShadow = true;
     g.add(walls);
   }
+  // rooftop vents and skylights on the big blocks
+  let seed = 7;
+  const rnd = () => { seed = (seed * 9301 + 49297) % 233280; return seed / 233280; };
+  for (let r = 2; r < ROWS - 2; r++) for (let c = 2; c < COLS - 2; c++) {
+    const deep = [tileAt(c, r), tileAt(c + 1, r), tileAt(c - 1, r), tileAt(c, r + 1), tileAt(c, r - 1), tileAt(c + 1, r + 1), tileAt(c - 1, r - 1)].every((t) => t === '#');
+    if (!deep || rnd() > 0.08) continue;
+    const kind = rnd();
+    if (kind < 0.5) {
+      const vent = box(0.9, 0.5, 0.9, 0xd9dde3, { roughness: 0.5 });
+      vent.position.set(tileX(c), WALL_H + 0.25, tileZ(r));
+      g.add(vent);
+      const fan = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 0.1, 16), mat(0x5c6670));
+      fan.position.set(tileX(c), WALL_H + 0.55, tileZ(r));
+      g.add(fan);
+    } else {
+      const sky = box(1.6, 0.25, 1.2, 0x9fd8ff, { transparent: true, opacity: 0.75, roughness: 0.05, clearcoat: 1 });
+      sky.position.set(tileX(c) + 0.5, WALL_H + 0.12, tileZ(r));
+      g.add(sky);
+    }
+  }
   if (roofGeos.length) {
-    const roofs = new THREE.Mesh(mergeGeometries(roofGeos, false)!, mat(shade(floor.wallColor, 0.8), { flat: false, roughness: 1 }));
+    const roofs = new THREE.Mesh(mergeGeometries(roofGeos, false)!, mat(shade(floor.wallColor, 0.62), { roughness: 0.85, clearcoat: 0 }));
     roofs.receiveShadow = true;
     g.add(roofs);
   }
@@ -151,13 +212,60 @@ export function buildWorld(floor: FloorDef): THREE.Group {
   // elevator
   g.add(makeElevator().translateX(ELEVATOR.col + ELEVATOR.width / 2).translateZ(tileZ(ELEVATOR.row)));
 
+  // shopfront windows and awnings on the empty storefronts that face the concourse
+  for (let r = 1; r < ROWS - 1; r++) {
+    let c = 0;
+    while (c < COLS) {
+      const facade = (x: number) => (tileAt(x, r) === '#' || tileAt(x, r) === 'L') && tileAt(x, r + 1) === '.' && tileAt(x, r - 1) === '#';
+      if (!facade(c)) { c++; continue; }
+      let end = c;
+      while (end + 1 < COLS && facade(end + 1)) end++;
+      const len = end - c + 1;
+      if (len >= 6) {
+        // split a long facade into separate shops, each with its own awning colour
+        const awningColors = [0xff6b6b, 0x2ec4b6, 0xffbf47, 0x8f7bff];
+        const shops = Math.max(1, Math.round(len / 10));
+        const shopLen = len / shops;
+        for (let i = 0; i < shops; i++) {
+          const x0 = c + i * shopLen;
+          const cx = x0 + shopLen / 2;
+          const glass = new THREE.Mesh(roundedBox(shopLen - 1.4, 1.45, 0.08, 0.03), mat(0xa8dcff, { transparent: true, opacity: 0.6, roughness: 0.05, metalness: 0.1, clearcoat: 1 }));
+          glass.position.set(cx, 0.95, r + 1.04);
+          g.add(glass);
+          const frame = box(shopLen - 1.2, 0.14, 0.14, 0xffffff);
+          frame.position.set(cx, 1.75, r + 1.06);
+          g.add(frame);
+          const color = awningColors[i % awningColors.length];
+          const awning = box(shopLen - 0.8, 0.1, 0.55, color);
+          awning.position.set(cx, WALL_H - 0.25, r + 1.22);
+          awning.rotation.x = 0.3;
+          g.add(awning);
+          const stripes = Math.max(2, Math.round(shopLen / 2));
+          for (let k = 0; k < stripes; k++) {
+            const stripe = box(0.35, 0.04, 0.5, 0xffffff, { clearcoat: 0 });
+            stripe.position.set(cx - (shopLen - 0.8) / 2 + (shopLen - 0.8) * (k + 0.5) / stripes, WALL_H - 0.19, r + 1.22);
+            stripe.rotation.x = 0.3;
+            g.add(stripe);
+          }
+          // a pillar between shops
+          if (i > 0) {
+            const pillar = box(0.5, WALL_H, 0.5, shade(floor.wallColor, 0.8));
+            pillar.position.set(x0, WALL_H / 2, r + 0.75);
+            g.add(pillar);
+          }
+        }
+      }
+      c = end + 1;
+    }
+  }
+
   // store sign above the doorway, and "for lease" signs
   const sign = makeTextSprite(floor.name.toUpperCase(), { size: 46, color: '#ffffff', bg: '#' + floor.uniformColor.toString(16).padStart(6, '0'), height: 0.5 });
   sign.position.set(ENTRANCE.col + 1, WALL_H + 0.45, tileZ(ENTRANCE.row) + 0.2);
   g.add(sign);
   for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) if (tileAt(c, r) === 'L') {
-    const s = makeTextSprite('FOR LEASE', { size: 36, color: '#3b3b3b', bg: '#f1ede4', height: 0.5 });
-    s.position.set(tileX(c), WALL_H * 0.72, tileZ(r) + 0.55);
+    const s = makeTextSprite('FOR LEASE', { size: 36, color: '#3b3b3b', bg: '#f1ede4', height: 0.45 });
+    s.position.set(tileX(c), 1.1, tileZ(r) + 0.75);
     g.add(s);
   }
   for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) if (tileAt(c, r) === 'X' && tileAt(c - 1, r) !== 'X') {
@@ -195,10 +303,10 @@ function makePlanter(): THREE.Group {
   const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.08, 0.6, 6), mat(0x6b4423));
   trunk.position.y = 0.8;
   trunk.castShadow = true;
-  const leaves = new THREE.Mesh(new THREE.IcosahedronGeometry(0.45, 1), mat(0x3f9d4a));
+  const leaves = new THREE.Mesh(new THREE.IcosahedronGeometry(0.45, 3), mat(0x3f9d4a));
   leaves.position.y = 1.3;
   leaves.castShadow = true;
-  const leaves2 = new THREE.Mesh(new THREE.IcosahedronGeometry(0.3, 1), mat(0x4fb85a));
+  const leaves2 = new THREE.Mesh(new THREE.IcosahedronGeometry(0.3, 3), mat(0x4fb85a));
   leaves2.position.set(0.2, 1.55, 0.1);
   leaves2.castShadow = true;
   g.add(pot, soil, trunk, leaves, leaves2);
@@ -208,11 +316,11 @@ function makePlanter(): THREE.Group {
 function makeFountain(size: number): THREE.Group {
   const g = new THREE.Group();
   const r = size / 2 - 0.1;
-  const basin = new THREE.Mesh(new THREE.CylinderGeometry(r, r, 0.55, 24), mat(0xb9b4a8, { roughness: 0.7 }));
+  const basin = new THREE.Mesh(new THREE.CylinderGeometry(r, r, 0.55, 48), mat(0xb9b4a8, { roughness: 0.7 }));
   basin.position.y = 0.275;
   basin.castShadow = true;
   basin.receiveShadow = true;
-  const water = new THREE.Mesh(new THREE.CylinderGeometry(r - 0.2, r - 0.2, 0.42, 24), mat(0x4aa8e0, { flat: false, transparent: true, opacity: 0.8, roughness: 0.2, metalness: 0.1 }));
+  const water = new THREE.Mesh(new THREE.CylinderGeometry(r - 0.2, r - 0.2, 0.42, 48), mat(0x4aa8e0, { flat: false, transparent: true, opacity: 0.8, roughness: 0.2, metalness: 0.1 }));
   water.position.y = 0.36;
   water.name = 'water';
   const pillar = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.34, 1.4, 10), mat(0xb9b4a8));
@@ -371,19 +479,17 @@ export function makeCrate(): THREE.Group {
 
 export function makePad(widthTiles: number, ok: boolean): THREE.Mesh {
   const plane = new THREE.Mesh(
-    new THREE.PlaneGeometry(widthTiles - 0.12, 0.88),
-    mat(ok ? 0x3ddc84 : 0x9aa3ad, { flat: false, transparent: true, opacity: ok ? 0.55 : 0.3, emissive: ok ? 0x1f7a4a : 0x222222 }),
+    roundedBox(widthTiles - 0.12, 0.06, 0.88, 0.03),
+    mat(ok ? 0x4ff0a0 : 0xb8c0c8, { transparent: true, opacity: ok ? 0.8 : 0.5, emissive: ok ? 0x1f7a4a : 0x333333 }),
   );
-  plane.rotation.x = -Math.PI / 2;
-  plane.position.y = 0.02;
+  plane.position.y = 0.03;
   plane.receiveShadow = true;
   return plane;
 }
 
 export function makeCashierMat(width: number, color: number): THREE.Mesh {
-  const m = new THREE.Mesh(new THREE.PlaneGeometry(width - 0.2, 0.8), mat(color, { flat: false, transparent: true, opacity: 0.35 }));
-  m.rotation.x = -Math.PI / 2;
-  m.position.y = 0.015;
+  const m = new THREE.Mesh(roundedBox(width - 0.2, 0.04, 0.8, 0.02), mat(color, { transparent: true, opacity: 0.45 }));
+  m.position.y = 0.02;
   return m;
 }
 
@@ -393,13 +499,13 @@ export function makeItem(p: ProductDef): THREE.Group {
   const g = new THREE.Group();
   let geo = itemGeoCache.get('item');
   if (!geo) {
-    geo = new THREE.BoxGeometry(0.26, 0.24, 0.24);
+    geo = roundedBox(0.26, 0.24, 0.24, 0.05);
     itemGeoCache.set('item', geo);
   }
   const body = new THREE.Mesh(geo, mat(p.color, { roughness: 0.6 }));
   body.position.y = 0.12;
   body.castShadow = true;
-  const stripe = new THREE.Mesh(new THREE.BoxGeometry(0.27, 0.07, 0.25), mat(p.accent, { roughness: 0.6 }));
+  const stripe = new THREE.Mesh(roundedBox(0.27, 0.07, 0.25, 0.02), mat(p.accent, { roughness: 0.6 }));
   stripe.position.y = 0.12;
   g.add(body, stripe);
   return g;

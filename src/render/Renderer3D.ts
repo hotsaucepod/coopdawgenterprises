@@ -3,6 +3,8 @@ import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
+import { GTAOPass } from 'three/examples/jsm/postprocessing/GTAOPass.js';
+import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 
 // Camera looks down at the world from a steep angle and follows the player.
 export class Renderer3D {
@@ -12,10 +14,11 @@ export class Renderer3D {
   sun: THREE.DirectionalLight;
   private target = new THREE.Vector3();
   private followPos = new THREE.Vector3();
-  private readonly tilt = THREE.MathUtils.degToRad(54);
+  private readonly tilt = THREE.MathUtils.degToRad(50);
   private distance = 18;
   private composer: EffectComposer | null = null;
   private bloom: UnrealBloomPass | null = null;
+  private ao: GTAOPass | null = null;
   readonly isMobile: boolean;
 
   constructor(private container: HTMLElement) {
@@ -27,18 +30,22 @@ export class Renderer3D {
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.05;
+    this.renderer.toneMappingExposure = 0.95;
     container.appendChild(this.renderer.domElement);
     this.renderer.domElement.style.display = 'block';
     this.renderer.domElement.style.touchAction = 'none';
 
-    this.scene.background = new THREE.Color(0x151823);
-    this.scene.fog = new THREE.Fog(0x151823, 30, 60);
-    this.camera = new THREE.PerspectiveCamera(42, 1, 0.5, 120);
+    // bright, sunny, toy-box world
+    this.scene.background = new THREE.Color(0xa9dcff);
+    this.scene.fog = new THREE.Fog(0xa9dcff, 34, 70);
+    this.camera = new THREE.PerspectiveCamera(40, 1, 0.5, 140);
+    const pmrem = new THREE.PMREMGenerator(this.renderer);
+    this.scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+    this.scene.environmentIntensity = 0.28;
 
-    const hemi = new THREE.HemisphereLight(0xdfe8ff, 0x6b5a45, 0.9);
+    const hemi = new THREE.HemisphereLight(0xcfe9ff, 0xf1d5b8, 0.5);
     this.scene.add(hemi);
-    this.sun = new THREE.DirectionalLight(0xfff2dc, 2.2);
+    this.sun = new THREE.DirectionalLight(0xfff4e0, 2.1);
     this.sun.castShadow = true;
     this.sun.shadow.mapSize.set(isMobile ? 1024 : 2048, isMobile ? 1024 : 2048);
     this.sun.shadow.camera.near = 1;
@@ -47,8 +54,9 @@ export class Renderer3D {
     this.sun.shadow.camera.right = 18;
     this.sun.shadow.camera.top = 18;
     this.sun.shadow.camera.bottom = -18;
-    this.sun.shadow.bias = -0.0008;
-    this.sun.shadow.normalBias = 0.02;
+    this.sun.shadow.bias = -0.0006;
+    this.sun.shadow.normalBias = 0.03;
+    this.sun.shadow.radius = 4;
     this.scene.add(this.sun);
     this.scene.add(this.sun.target);
     const fill = new THREE.DirectionalLight(0xbcd4ff, 0.35);
@@ -59,7 +67,16 @@ export class Renderer3D {
     if (!isMobile) {
       this.composer = new EffectComposer(this.renderer);
       this.composer.addPass(new RenderPass(this.scene, this.camera));
-      this.bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.22, 0.4, 1.35);
+      try {
+        this.ao = new GTAOPass(this.scene, this.camera, 1, 1);
+        this.ao.output = GTAOPass.OUTPUT.Default;
+        this.ao.blendIntensity = 0.7;
+        this.ao.updateGtaoMaterial({ radius: 0.6, distanceExponent: 1.5, thickness: 1, scale: 1.2, samples: 12 });
+        this.composer.addPass(this.ao);
+      } catch {
+        this.ao = null;
+      }
+      this.bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.18, 0.5, 1.3);
       this.composer.addPass(this.bloom);
       this.composer.addPass(new OutputPass());
     }
@@ -81,6 +98,7 @@ export class Renderer3D {
     this.distance = THREE.MathUtils.clamp(wanted, 13, 26);
     this.camera.updateProjectionMatrix();
     this.composer?.setSize(w, h);
+    this.ao?.setSize(w, h);
     this.bloom?.setSize(w / 2, h / 2);
   }
 
@@ -100,7 +118,7 @@ export class Renderer3D {
     const d = this.distance;
     this.camera.position.set(this.followPos.x, Math.sin(this.tilt) * d, this.followPos.z + Math.cos(this.tilt) * d);
     this.camera.lookAt(this.followPos.x, 0.4, this.followPos.z);
-    this.sun.position.set(this.followPos.x + 10, 22, this.followPos.z + 8);
+    this.sun.position.set(this.followPos.x - 9, 22, this.followPos.z + 11);
     this.sun.target.position.set(this.followPos.x, 0, this.followPos.z);
   }
 
