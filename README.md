@@ -1,6 +1,6 @@
 # Mall Tycoon
 
-A top-down store-running game. Buy shelves, order stock, keep the shelves full, ring up customers, and unlock every upgrade on a floor to open the next floor of the mall. Runs in any browser and installs on iPhone through Xcode.
+A 3D store-running game seen from above. You run a store inside an open mall floor: buy shelves, order stock, keep the shelves full, ring up customers, and unlock every upgrade to open the next floor. Built with Three.js, runs in any browser, and installs on iPhone through Xcode.
 
 ## Play it
 
@@ -9,7 +9,8 @@ A top-down store-running game. Buy shelves, order stock, keep the shelves full, 
 - **Buy pads:** stand on a glowing pad for a moment to buy that shelf or counter (only when you can afford it).
 - **Order:** buys a case of a product. It shows up in the storage room at the top.
 - **Build:** buy shelves, hire a cashier or a stocker, and upgrade your speed and how much you can carry.
-- **Elevator:** bottom right of the store, or the Elevator button.
+- **Elevator:** walk down the concourse to the elevator doors (top right of the mall), or use the Elevator button.
+- **The mall:** your store opens onto a concourse with a fountain, benches, empty storefronts, and window shoppers. Customers come in through the mall exits at the bottom and walk to your store.
 
 Win and lose: customers who wait too long at an empty shelf leave angry and your star rating drops. Below 15 the store gets closed. Buy everything on a floor to unlock the next one. Money is cumulative across floors and you can always go back down.
 
@@ -49,10 +50,14 @@ Everything about the floors is data in `src/data/floors.ts`: store names, produc
 | File | What it does |
 | --- | --- |
 | `src/data/floors.ts` | Floors, products, prices, upgrades, layout constants |
-| `src/scenes/GameScene.ts` | The store: buying, stocking, customers, checkout, rating, menus |
+| `src/data/mallMap.ts` | The mall floor drawn as a text picture (walls, store, concourse, fountain, elevator, exits) |
+| `src/game/Game.ts` | The rules: buying, stocking, customers, checkout, rating, menus |
+| `src/render/builders.ts` | Every 3D object (walls, shelves, counters, crates, fountain, elevator), built from blocks |
+| `src/render/Character.ts` | The round-headed, thick-legged people and their walk animation |
+| `src/render/Renderer3D.ts` | Camera, lighting, shadows, bloom |
 | `src/entities/Customer.ts` | Customer behaviour: shop, wait, queue, pay, leave |
 | `src/entities/Stocker.ts` | The hired helper who carries stock to shelves |
-| `src/systems/textures.ts` | All the art, drawn with code |
+| `src/entities/Walker.ts` | Window shoppers wandering the concourse |
 | `src/systems/save.ts` | Saving progress on the device |
 | `index.html`, `src/styles.css` | The HUD and menus |
 

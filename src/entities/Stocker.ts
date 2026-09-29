@@ -1,7 +1,8 @@
 import { Person } from './Person';
-import type { GameScene } from '../scenes/GameScene';
-import { STORAGE_DOOR_COLS, STORAGE_WALL_ROW, TILE } from '../data/floors';
+import type { Game } from '../game/Game';
+import { STORAGE_DOOR_COLS, STORAGE_WALL_ROW } from '../data/floors';
 import type { Pt } from '../systems/pathfinding';
+import type { CharacterOpts } from '../render/Character';
 
 type S = 'idle' | 'toCrate' | 'picking' | 'toShelf' | 'placing';
 
@@ -12,99 +13,88 @@ export class Stocker {
   carrying: { productId: string; count: number } | null = null;
   targetFixture: string | null = null;
   timer = 0;
-  carried: Phaser.GameObjects.Image[] = [];
   readonly capacity = 4;
 
-  constructor(public scene: GameScene, texKey: string) {
+  constructor(public game: Game, look: CharacterOpts) {
     const home = this.home();
-    this.person = new Person(scene, texKey, home.col * TILE + TILE / 2, home.row * TILE + TILE / 2);
-    this.person.speed = 120;
+    this.person = new Person(game.r3d.scene, look, home.col, home.row);
+    this.person.speed = 2.8;
   }
 
   home(): Pt {
     return { col: STORAGE_DOOR_COLS[1], row: STORAGE_WALL_ROW + 1 };
   }
 
-  private findJob(): { fixtureId: string; productId: string } | null {
-    const jobs = this.scene.stockingJobs();
-    return jobs.length ? jobs[0] : null;
+  private syncCarried(): void {
+    this.game.attachCarried(this.person.character, this.carrying?.count ?? 0, this.carrying?.productId ?? null);
   }
 
   update(dtMs: number): void {
     this.person.update(dtMs);
-    for (let i = 0; i < this.carried.length; i++) {
-      this.carried[i].setPosition(this.person.x, this.person.y - 46 - i * 6).setDepth(this.person.sprite.depth + 0.1);
-    }
 
     if (this.state === 'idle') {
       this.timer -= dtMs;
       if (this.timer > 0) return;
       this.timer = 800;
-      const job = this.findJob();
+      const jobs = this.game.stockingJobs();
+      const job = jobs.length ? jobs[0] : null;
       if (!job) return;
       this.targetFixture = job.fixtureId;
-      const crateTile = this.scene.crateAccessTile(job.productId);
+      const crateTile = this.game.crateAccessTile(job.productId);
       if (!crateTile) return;
       this.state = 'toCrate';
-      this.person.setPath(this.scene.staffPath(this.person.tile, crateTile), () => {
+      this.person.setPath(this.game.staffPath(this.person.tile, crateTile), () => {
         this.state = 'picking';
         this.timer = 0;
+        this.person.character.face(0, -1);
       });
     } else if (this.state === 'picking') {
       this.timer -= dtMs;
       if (this.timer > 0) return;
       this.timer = 180;
-      const productId = this.scene.shelfProduct(this.targetFixture!);
+      const productId = this.game.shelfProduct(this.targetFixture!);
       const have = this.carrying?.count ?? 0;
-      if (have >= this.capacity || this.scene.crateStock(productId) <= 0) {
+      if (have >= this.capacity || this.game.crateStock(productId) <= 0) {
         if (have === 0) {
           this.state = 'idle';
           return;
         }
-        const shelfTile = this.scene.shelfAccessTile(this.targetFixture!);
+        const shelfTile = this.game.shelfAccessTile(this.targetFixture!);
         if (!shelfTile) { this.state = 'idle'; return; }
         this.state = 'toShelf';
-        this.person.setPath(this.scene.staffPath(this.person.tile, shelfTile), () => {
+        this.person.setPath(this.game.staffPath(this.person.tile, shelfTile), () => {
           this.state = 'placing';
           this.timer = 0;
+          const c = this.game.shelfCenter(this.targetFixture!);
+          if (c) this.person.character.face(c.x - this.person.x, c.z - this.person.z);
         });
         return;
       }
-      if (this.scene.takeFromCrate(productId)) {
+      if (this.game.takeFromCrate(productId)) {
         this.carrying = { productId, count: have + 1 };
-        this.carried.push(this.scene.add.image(this.person.x, this.person.y, this.scene.itemKey(productId)));
+        this.syncCarried();
       }
     } else if (this.state === 'placing') {
       this.timer -= dtMs;
       if (this.timer > 0) return;
       this.timer = 180;
-      if (!this.carrying || this.carrying.count <= 0 || this.scene.shelfIsFull(this.targetFixture!)) {
-        // shelf full or nothing left: put leftovers back in the crate (simplest, no waste)
-        if (this.carrying && this.carrying.count > 0) {
-          this.scene.returnToCrate(this.carrying.productId, this.carrying.count);
-        }
-        this.clearCarried();
+      if (!this.carrying || this.carrying.count <= 0 || this.game.shelfIsFull(this.targetFixture!)) {
+        if (this.carrying && this.carrying.count > 0) this.game.returnToCrate(this.carrying.productId, this.carrying.count);
+        this.carrying = null;
+        this.syncCarried();
         this.state = 'idle';
         this.timer = 300;
         return;
       }
-      if (this.scene.putOnShelf(this.targetFixture!, this.carrying.productId)) {
+      if (this.game.putOnShelf(this.targetFixture!, this.carrying.productId)) {
         this.carrying.count -= 1;
-        const img = this.carried.pop();
-        img?.destroy();
         if (this.carrying.count === 0) this.carrying = null;
+        this.syncCarried();
       }
     }
   }
 
-  private clearCarried(): void {
-    for (const c of this.carried) c.destroy();
-    this.carried = [];
-    this.carrying = null;
-  }
-
   destroy(): void {
-    this.clearCarried();
     this.person.destroy();
   }
 }

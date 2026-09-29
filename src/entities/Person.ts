@@ -1,31 +1,29 @@
-import Phaser from 'phaser';
-import { TILE } from '../data/floors';
+import * as THREE from 'three';
 import type { Pt } from '../systems/pathfinding';
+import { Character, CharacterOpts } from '../render/Character';
 
-// Shared walking + animation for customers and staff (not the player; the player uses physics).
+// Shared walking for customers and staff. Positions are in tiles (x = col + 0.5, z = row + 0.5).
 export class Person {
-  sprite: Phaser.GameObjects.Image;
-  shadow: Phaser.GameObjects.Image;
+  character: Character;
   path: Pt[] = [];
-  speed = 110;
-  private animT = 0;
-  private frame = 0;
+  speed = 2.4; // tiles per second
   private onArrive: (() => void) | null = null;
 
-  constructor(public scene: Phaser.Scene, public texKey: string, x: number, y: number) {
-    this.shadow = scene.add.image(x, y + 26, 'shadow').setDepth(1);
-    this.sprite = scene.add.image(x, y, `${texKey}_0`).setOrigin(0.5, 0.86);
+  constructor(scene: THREE.Scene, look: CharacterOpts, col: number, row: number) {
+    this.character = new Character(look);
+    this.character.group.position.set(col + 0.5, 0, row + 0.5);
+    scene.add(this.character.group);
   }
 
-  get x(): number { return this.sprite.x; }
-  get y(): number { return this.sprite.y; }
+  get x(): number { return this.character.group.position.x; }
+  get z(): number { return this.character.group.position.z; }
+  get pos(): THREE.Vector3 { return this.character.group.position; }
 
   get tile(): Pt {
-    return { col: Math.floor(this.sprite.x / TILE), row: Math.floor(this.sprite.y / TILE) };
+    return { col: Math.floor(this.x), row: Math.floor(this.z) };
   }
 
   setPath(path: Pt[], onArrive: () => void): void {
-    // drop the first node if we're already standing on it
     if (path.length && path[0].col === this.tile.col && path[0].row === this.tile.row) path = path.slice(1);
     this.path = path;
     this.onArrive = onArrive;
@@ -42,16 +40,19 @@ export class Person {
 
   update(dtMs: number): void {
     const dt = dtMs / 1000;
+    const g = this.character.group;
     if (this.path.length) {
       const next = this.path[0];
-      const tx = next.col * TILE + TILE / 2;
-      const ty = next.row * TILE + TILE / 2;
-      const dx = tx - this.sprite.x;
-      const dy = ty - this.sprite.y;
-      const dist = Math.hypot(dx, dy);
+      const tx = next.col + 0.5;
+      const tz = next.row + 0.5;
+      const dx = tx - g.position.x;
+      const dz = tz - g.position.z;
+      const dist = Math.hypot(dx, dz);
       const step = this.speed * dt;
+      this.character.face(dx, dz);
       if (dist <= step) {
-        this.sprite.setPosition(tx, ty);
+        g.position.x = tx;
+        g.position.z = tz;
         this.path.shift();
         if (!this.path.length && this.onArrive) {
           const cb = this.onArrive;
@@ -59,26 +60,17 @@ export class Person {
           cb();
         }
       } else {
-        this.sprite.x += (dx / dist) * step;
-        this.sprite.y += (dy / dist) * step;
-        if (dx !== 0) this.sprite.setFlipX(dx < 0);
+        g.position.x += (dx / dist) * step;
+        g.position.z += (dz / dist) * step;
       }
-      this.animT += dtMs;
-      if (this.animT > 140) {
-        this.animT = 0;
-        this.frame = 1 - this.frame;
-        this.sprite.setTexture(`${this.texKey}_${this.frame}`);
-      }
-    } else if (this.frame !== 0) {
-      this.frame = 0;
-      this.sprite.setTexture(`${this.texKey}_0`);
+      this.character.setWalking(true);
+    } else {
+      this.character.setWalking(false);
     }
-    this.shadow.setPosition(this.sprite.x, this.sprite.y + 4);
-    this.sprite.setDepth(10 + this.sprite.y / 10);
+    this.character.animate(dt);
   }
 
   destroy(): void {
-    this.sprite.destroy();
-    this.shadow.destroy();
+    this.character.group.removeFromParent();
   }
 }

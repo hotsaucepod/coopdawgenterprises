@@ -37,8 +37,7 @@ export function findPath(blocked: Set<string>, from: Pt, to: Pt): Pt[] {
     for (const [dc, dr] of dirs) {
       const nc = cur.col + dc;
       const nr = cur.row + dr;
-      // allow walking one tile off the bottom edge (the entrance).
-      if (nc < 0 || nc >= COLS || nr < 0 || nr > ROWS) continue;
+      if (nc < 0 || nc >= COLS || nr < 0 || nr >= ROWS) continue;
       const nk = key(nc, nr);
       if (closed.has(nk)) continue;
       const isTarget = nc === to.col && nr === to.row;

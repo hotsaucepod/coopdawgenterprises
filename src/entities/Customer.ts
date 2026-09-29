@@ -1,7 +1,8 @@
-import Phaser from 'phaser';
-import { TILE, ENTRANCE, RATING_PER_ANGRY } from '../data/floors';
+import { RATING_PER_ANGRY, MALL_EXITS } from '../data/floors';
 import { Person } from './Person';
-import type { GameScene } from '../scenes/GameScene';
+import { Bubble } from './Bubble';
+import { CUSTOMER_LOOKS } from '../render/Character';
+import type { Game } from '../game/Game';
 import type { Pt } from '../systems/pathfinding';
 
 export type CustomerState = 'entering' | 'toShelf' | 'shopping' | 'waiting' | 'toQueue' | 'inQueue' | 'checkout' | 'leaving' | 'done';
@@ -13,10 +14,7 @@ export class Customer {
   state: CustomerState = 'entering';
   wants: Want[];
   basket: { productId: string; count: number }[] = [];
-  bubble: Phaser.GameObjects.Container;
-  bubbleText: Phaser.GameObjects.Text;
-  bubbleIcon: Phaser.GameObjects.Image;
-  bar: Phaser.GameObjects.Graphics;
+  bubble: Bubble;
   patience = 0;
   patienceMax = 1;
   shopTimer = 0;
@@ -26,36 +24,15 @@ export class Customer {
   queueTile: Pt | null = null;
   arrivedAtQueue = false;
   angry = false;
+  private exit: Pt;
 
-  constructor(public scene: GameScene, variant: number, wants: Want[]) {
+  constructor(public game: Game, variant: number, wants: Want[]) {
     this.wants = wants;
-    const x = ENTRANCE.col * TILE + TILE / 2;
-    const y = (ENTRANCE.row + 1) * TILE + TILE / 2;
-    this.person = new Person(scene, `cust_${variant}`, x, y);
-    this.person.speed = 100 + Math.random() * 30;
-
-    this.bubbleIcon = scene.add.image(0, -1, '__DEFAULT').setVisible(false).setScale(1.1);
-    this.bubbleText = scene.add.text(0, -2, '', { fontSize: '16px', color: '#111', fontStyle: 'bold' }).setOrigin(0.5);
-    const bg = scene.add.image(0, 0, 'bubble').setOrigin(0.5, 0.65);
-    this.bar = scene.add.graphics();
-    this.bubble = scene.add.container(0, 0, [bg, this.bubbleIcon, this.bubbleText, this.bar]).setVisible(false);
+    this.exit = MALL_EXITS[Math.floor(Math.random() * MALL_EXITS.length)];
+    this.person = new Person(game.r3d.scene, CUSTOMER_LOOKS[variant % CUSTOMER_LOOKS.length], this.exit.col, this.exit.row);
+    this.person.speed = 2.3 + Math.random() * 0.7;
+    this.bubble = new Bubble(game.r3d.scene);
     this.goToNextShelf();
-  }
-
-  private setBubble(kind: 'none' | 'item' | 'text', value?: string): void {
-    if (kind === 'none') {
-      this.bubble.setVisible(false);
-      return;
-    }
-    this.bubble.setVisible(true);
-    this.bar.clear();
-    if (kind === 'item' && value) {
-      this.bubbleIcon.setTexture(value).setVisible(true);
-      this.bubbleText.setText('');
-    } else {
-      this.bubbleIcon.setVisible(false);
-      this.bubbleText.setText(value ?? '');
-    }
   }
 
   private goToNextShelf(): void {
@@ -64,19 +41,23 @@ export class Customer {
       this.goToQueue();
       return;
     }
-    const target = this.scene.shelfAccessTile(want.fixtureId);
+    const target = this.game.shelfAccessTile(want.fixtureId);
     if (!target) {
-      // shelf vanished (should not happen) — just skip it
       want.count = 0;
       this.goToNextShelf();
       return;
     }
     this.state = 'toShelf';
-    const path = this.scene.customerPath(this.person.tile, target);
-    this.person.setPath(path, () => {
+    this.person.setPath(this.game.customerPath(this.person.tile, target), () => {
       this.state = 'shopping';
       this.shopTimer = 300;
+      this.faceShelf(want.fixtureId);
     });
+  }
+
+  private faceShelf(fixtureId: string): void {
+    const c = this.game.shelfCenter(fixtureId);
+    if (c) this.person.character.face(c.x - this.person.x, c.z - this.person.z);
   }
 
   private goToQueue(): void {
@@ -85,18 +66,18 @@ export class Customer {
       return;
     }
     this.state = 'toQueue';
-    this.scene.enqueue(this);
+    this.game.enqueue(this);
     this.moveToQueueTile();
   }
 
   moveToQueueTile(): void {
-    const tile = this.scene.queueTileFor(this.queueIndex);
+    const tile = this.game.queueTileFor(this.queueIndex);
     if (this.queueTile && tile.col === this.queueTile.col && tile.row === this.queueTile.row) return;
     this.queueTile = tile;
     this.arrivedAtQueue = false;
-    const path = this.scene.customerPath(this.person.tile, tile);
-    this.person.setPath(path, () => {
+    this.person.setPath(this.game.customerPath(this.person.tile, tile), () => {
       this.arrivedAtQueue = true;
+      this.person.character.face(0, -1); // face the counter
       if (this.state === 'toQueue') this.state = 'inQueue';
     });
     if (this.state === 'toQueue' && !this.person.moving) this.state = 'inQueue';
@@ -107,87 +88,77 @@ export class Customer {
     const items = this.basket.reduce((a, b) => a + b.count, 0);
     this.checkoutTotal = 1200 + items * 350;
     this.checkoutTimer = this.checkoutTotal;
-    this.setBubble('text', '💳');
+    this.bubble.showText('💳');
   }
 
   basketValue(): number {
     let v = 0;
-    for (const b of this.basket) v += this.scene.productPrice(b.productId) * b.count;
+    for (const b of this.basket) v += this.game.productPrice(b.productId) * b.count;
     return v;
   }
 
   leave(angry: boolean): void {
     this.angry = angry;
-    this.scene.dequeue(this);
+    this.game.dequeue(this);
     this.state = 'leaving';
-    this.setBubble('text', angry ? '😡' : '😊');
-    const exit = { col: ENTRANCE.col, row: ENTRANCE.row + 1 };
-    const path = this.scene.customerPath(this.person.tile, exit);
-    this.person.setPath(path, () => {
+    this.bubble.showText(angry ? '😡' : '😊');
+    this.bubble.setBar(null);
+    this.person.setPath(this.game.customerPath(this.person.tile, this.exit), () => {
       this.state = 'done';
     });
-    if (angry) this.scene.customerAngry(RATING_PER_ANGRY);
+    if (angry) this.game.customerAngry(RATING_PER_ANGRY, this.person.pos);
   }
 
   update(dtMs: number): void {
     this.person.update(dtMs);
-    this.bubble.setPosition(this.person.x, this.person.y - 62).setDepth(this.person.sprite.depth + 0.5);
+    this.bubble.follow(this.person.pos, dtMs / 1000);
 
     if (this.state === 'shopping' || this.state === 'waiting') {
       const want = this.wants.find((w) => w.count > 0);
       if (!want) {
-        this.setBubble('none');
+        this.bubble.hide();
         this.goToNextShelf();
         return;
       }
-      const stock = this.scene.shelfStock(want.fixtureId);
+      const stock = this.game.shelfStock(want.fixtureId);
       if (stock > 0) {
         if (this.state === 'waiting') {
           this.state = 'shopping';
-          this.setBubble('none');
+          this.bubble.hide();
         }
         this.shopTimer -= dtMs;
         if (this.shopTimer <= 0) {
           this.shopTimer = 400;
-          const productId = this.scene.takeFromShelf(want.fixtureId);
+          const productId = this.game.takeFromShelf(want.fixtureId);
           if (productId) {
             want.count -= 1;
             const b = this.basket.find((x) => x.productId === productId);
             if (b) b.count += 1;
             else this.basket.push({ productId, count: 1 });
+            this.game.attachCarried(this.person.character, this.basket.reduce((a, x) => a + x.count, 0), productId);
           }
         }
       } else {
         if (this.state === 'shopping') {
           this.state = 'waiting';
-          this.patienceMax = this.scene.floor.patienceMs;
+          this.patienceMax = this.game.floor.patienceMs;
           this.patience = this.patienceMax;
-          const productId = this.scene.shelfProduct(want.fixtureId);
-          this.setBubble('item', this.scene.itemKey(productId));
+          this.bubble.showItem(this.game.product(this.game.shelfProduct(want.fixtureId)));
         }
         this.patience -= dtMs;
         const frac = Math.max(0, this.patience / this.patienceMax);
-        this.bar.clear();
-        this.bar.fillStyle(0x333333, 1);
-        this.bar.fillRect(-15, 12, 30, 4);
-        this.bar.fillStyle(frac > 0.4 ? 0x3ddc84 : 0xff6b6b, 1);
-        this.bar.fillRect(-15, 12, 30 * frac, 4);
+        this.bubble.setBar(frac, frac > 0.4 ? 0x3ddc84 : 0xff6b6b);
         if (this.patience <= 0) {
-          // give up on every remaining want; leave angry
           for (const w of this.wants) w.count = 0;
           this.leave(true);
         }
       }
     } else if (this.state === 'checkout') {
       this.checkoutTimer -= dtMs;
-      const frac = 1 - this.checkoutTimer / this.checkoutTotal;
-      this.bar.clear();
-      this.bar.fillStyle(0x333333, 1);
-      this.bar.fillRect(-15, 12, 30, 4);
-      this.bar.fillStyle(0xffd166, 1);
-      this.bar.fillRect(-15, 12, 30 * Math.max(0, Math.min(1, frac)), 4);
+      this.bubble.setBar(1 - this.checkoutTimer / this.checkoutTotal, 0xffd166);
       if (this.checkoutTimer <= 0) {
-        this.scene.completeSale(this);
+        this.game.completeSale(this);
+        this.game.attachCarried(this.person.character, 0, null);
         this.leave(false);
       }
     }

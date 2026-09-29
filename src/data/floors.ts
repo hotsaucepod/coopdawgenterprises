@@ -1,10 +1,9 @@
 // Everything about a floor (store) is data. To tweak a floor, change numbers here.
 
-export const TILE = 48;
-export const COLS = 11;
-export const ROWS = 18;
-export const GAME_W = COLS * TILE; // 528
-export const GAME_H = ROWS * TILE; // 864
+import { MALL_MAP } from './mallMap';
+
+export const COLS = MALL_MAP[0].length; // 40
+export const ROWS = MALL_MAP.length;    // 30
 
 export interface ProductDef {
   id: string;
@@ -70,7 +69,7 @@ export const UPGRADES: UpgradeDef[] = [
 ];
 
 export const CARRY_BY_LEVEL = [1, 2, 3, 5, 7, 10];
-export const SPEED_BY_LEVEL = [150, 175, 200, 230, 260, 300];
+export const SPEED_BY_LEVEL = [3.2, 3.7, 4.2, 4.8, 5.4, 6.2]; // tiles per second
 
 export const RATING_START = 70;
 export const RATING_CLOSED_BELOW = 15;
@@ -78,6 +77,7 @@ export const RATING_PER_SALE = 1;
 export const RATING_PER_ANGRY = 7;
 
 // ---------- layout (shared by every floor) ----------
+// The store occupies the top-left of MALL_MAP (cols 0-10, rows 0-17) and opens onto the concourse.
 // Sales floor shelf slots: 3 rows x 3 columns, each shelf is 2 tiles wide.
 export const SHELF_SLOTS: { col: number; row: number }[] = [
   { col: 1, row: 5 }, { col: 4, row: 5 }, { col: 7, row: 5 },
@@ -93,8 +93,13 @@ export const QUEUE_TILES: { col: number; row: number }[] = [
   { col: 2, row: 15 }, { col: 6, row: 15 }, { col: 2, row: 16 }, { col: 6, row: 16 },
   { col: 1, row: 16 }, { col: 7, row: 16 }, { col: 3, row: 16 }, { col: 5, row: 16 },
 ];
-export const ENTRANCE = { col: 4, row: 17 };               // door in the bottom wall
-export const ELEVATOR = { col: 9, row: 15 };               // 1 wide, 2 tall (rows 15-16)
+export const ENTRANCE = { col: 4, row: 17 };               // store doorway (2 wide: cols 4-5) onto the concourse
+export const ELEVATOR = { col: 35, row: 1, width: 2 };     // on the concourse, accessed from row 2
+export const PLAYER_START = { col: 5, row: 4 };
+export const MALL_EXITS: { col: number; row: number }[] = [ // customers come and go through these
+  { col: 5, row: 29 }, { col: 6, row: 29 }, { col: 30, row: 29 }, { col: 31, row: 29 },
+];
+export const STORE_BOUNDS = { col: 0, row: 0, width: 11, height: 18 };
 
 // ---------- helpers to build floors quickly ----------
 function shelf(id: string, name: string, cost: number, productId: string, slot: number, capacity = 12): FixtureDef {
