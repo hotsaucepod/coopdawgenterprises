@@ -14,7 +14,7 @@ export class Renderer3D {
   sun: THREE.DirectionalLight;
   private target = new THREE.Vector3();
   private followPos = new THREE.Vector3();
-  private readonly tilt = THREE.MathUtils.degToRad(50);
+  private readonly tilt = THREE.MathUtils.degToRad(60);
   private distance = 18;
   private composer: EffectComposer | null = null;
   private bloom: UnrealBloomPass | null = null;

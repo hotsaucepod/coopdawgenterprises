@@ -10,7 +10,7 @@ import { findPath, Pt } from '../systems/pathfinding';
 import { ui, fmtMoney } from '../systems/ui';
 import { Renderer3D } from '../render/Renderer3D';
 import {
-  buildWorld, makeShelf, shelfStyleFor, makeCounter, makeCrate, makePad, makeCashierMat, makeItem, tileAt, isSolidTile, disposeGroup, FadeWall, WALL_H,
+  buildWorld, makeShelf, shelfStyleFor, makeCounter, makeCrate, makePad, makeCashierMat, makeItem, mat, tileAt, isSolidTile, disposeGroup, makeFadeable, FadeWall, WALL_H,
 } from '../render/builders';
 import { makeTextSprite, updateTextSprite } from '../render/text';
 import { Character } from '../render/Character';
@@ -26,6 +26,7 @@ interface ShelfView {
   items: THREE.Group[];
   label: THREE.Sprite;
 }
+interface FadeFixture { col: number; row: number; w: number; mats: THREE.Material[]; }
 interface PadView {
   def: FixtureDef;
   col: number; row: number; w: number; h: number;
@@ -55,6 +56,7 @@ export class Game {
 
   private world: THREE.Group | null = null;
   private fadeWalls: FadeWall[] = [];
+  private fadeFixtures: FadeFixture[] = [];
   private dynamic = new THREE.Group();     // everything that changes per floor besides the world
   player!: Character;
   hand: string[] = [];                     // product ids the player is carrying, bottom to top
@@ -152,6 +154,7 @@ export class Game {
     this.crates.clear();
     this.floats = [];
     this.pops = [];
+    this.fadeFixtures = [];
     this.hand = [];
     this.closed = false;
     this.paused = false;
@@ -244,12 +247,12 @@ export class Game {
         group.add(it);
         samples.push(it);
       }
-      const count = makeTextSprite('0', { size: 40, bg: 'rgba(0,0,0,0.7)', color: '#ffffff', height: 0.36 });
-      count.position.set(0.3, 1.5, 0.2);
+      const count = makeTextSprite(p.name + '\n0', { size: 40, bg: 'rgba(20,24,36,0.85)', color: '#ffffff', height: 0.7 });
+      count.position.set(0, i % 2 === 0 ? 1.55 : 2.3, 0.1);   // staggered heights so the row of signs stays readable
       group.add(count);
-      const name = makeTextSprite(p.name, { size: 30, color: '#ffffff', bg: '#' + p.color.toString(16).padStart(6, '0') + 'cc', height: 0.32 });
-      name.position.set(0, 0.3, 0.62);
-      group.add(name);
+      const dot = new THREE.Mesh(new THREE.SphereGeometry(0.09, 10, 8), mat(p.color, { emissive: p.color }));
+      dot.position.set(0, i % 2 === 0 ? 1.1 : 1.85, 0.1);
+      group.add(dot);
       this.dynamic.add(group);
       this.crates.set(p.id, { productId: p.id, col, row, group, count, samples });
       this.refreshCrate(p.id);
@@ -325,10 +328,11 @@ export class Game {
         group.add(it);
         items.push(it);
       }
-      const label = makeTextSprite(product.name, { size: 28, color: '#ffffff', height: 0.34 });
-      label.position.set(0, 1.95, 0.2);
+      const label = makeTextSprite(product.name, { size: 30, color: '#ffffff', height: 0.42 });
+      label.position.set(0, 1.85, 0.2);
       group.add(label);
       this.dynamic.add(group);
+      this.fadeFixtures.push({ col: r.col, row: r.row, w: r.w, mats: makeFadeable(group) });
       for (const dc of [0, 1]) this.playerSolid.add(key(r.col + dc, r.row));
       this.shelves.set(f.id, { def: f, ...r, group, items, label });
       this.refreshShelf(f.id);
@@ -337,6 +341,7 @@ export class Game {
       const group = makeCounter();
       group.position.set(r.col + r.w / 2, 0, r.row + 0.5);
       this.dynamic.add(group);
+      this.fadeFixtures.push({ col: r.col, row: r.row, w: r.w, mats: makeFadeable(group) });
       for (let i = 0; i < r.w; i++) this.playerSolid.add(key(r.col + i, r.row));
       const matMesh = makeCashierMat(r.w, this.floor.uniformColor);
       matMesh.position.set(r.col + r.w / 2, 0.015, r.row - 0.5);
@@ -557,7 +562,8 @@ export class Game {
 
   private floatText(text: string, at: THREE.Vector3, color: string): void {
     const s = makeTextSprite(text, { size: 44, color, height: 0.5 });
-    s.position.set(at.x, at.y + 2.4, at.z);
+    // spread popups out a little so several at once stay readable
+    s.position.set(at.x + (Math.random() - 0.5) * 0.8, at.y + 2.6 + Math.random() * 0.5 + this.floats.length * 0.15, at.z);
     this.r3d.scene.add(s);
     this.floats.push({ sprite: s, life: 1000 });
   }
@@ -676,7 +682,7 @@ export class Game {
     if (!s) return;
     const stock = this.shelfStock(fixtureId);
     s.items.forEach((it, i) => { it.visible = i < stock; });
-    updateTextSprite(s.label, `${this.product(s.def.productId!).name} ${stock}/${s.def.capacity ?? 12}`, { size: 28, color: stock === 0 ? '#ff6b6b' : '#ffffff', height: 0.34 });
+    updateTextSprite(s.label, `${this.product(s.def.productId!).name} ${stock}/${s.def.capacity ?? 12}`, { size: 30, color: stock === 0 ? '#ff6b6b' : '#ffffff', height: 0.42 });
     if (ui.panelOpen()) this.refreshOpenPanel();
   }
 
@@ -684,7 +690,7 @@ export class Game {
     const c = this.crates.get(productId);
     if (!c) return;
     const n = this.crateStock(productId);
-    updateTextSprite(c.count, String(n), { size: 40, bg: n > 0 ? 'rgba(0,0,0,0.7)' : 'rgba(180,40,40,0.85)', color: '#ffffff', height: 0.36 });
+    updateTextSprite(c.count, `${this.product(productId).name}\n${n}`, { size: 40, bg: n > 0 ? 'rgba(20,24,36,0.85)' : 'rgba(150,40,40,0.9)', color: n > 0 ? '#ffffff' : '#ffd6d6', height: 0.7 });
     const shown = n <= 0 ? 0 : n < 4 ? 1 : n < 8 ? 2 : n < 12 ? 3 : 4;
     c.samples.forEach((it, i) => { it.visible = i < shown; });
     if (ui.panelOpen()) this.refreshOpenPanel();
@@ -896,6 +902,14 @@ export class Game {
       const m = w.mesh.material as THREE.MeshPhysicalMaterial;
       m.opacity += (target - m.opacity) * k;
       w.mesh.castShadow = m.opacity > 0.6;
+    }
+    // cabinets and counters right in front of the player go see-through too
+    for (const f of this.fadeFixtures) {
+      const dz = f.row + 0.5 - p.z;
+      const inX = p.x > f.col - 0.6 && p.x < f.col + f.w + 0.6;
+      const occluding = dz > 0.3 && dz < 2.6 && inX;
+      const target = occluding ? 0.22 : 1;
+      for (const m of f.mats) m.opacity += (target - m.opacity) * k;
     }
     void WALL_H;
   }

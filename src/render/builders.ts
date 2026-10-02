@@ -415,17 +415,17 @@ export function makeShelf(style: ShelfStyle, accent: number, capacity: number): 
   const rows = Math.ceil(capacity / perRow);
   if (style === 'rack') {
     const frameColor = 0x8d97a1;
-    const back = box(1.96, 1.5, 0.06, frameColor, { metalness: 0.3, roughness: 0.6 });
-    back.position.set(0, 0.75, -0.44);
+    const back = box(1.96, 1.3, 0.06, frameColor, { metalness: 0.3, roughness: 0.6 });
+    back.position.set(0, 0.65, -0.44);
     g.add(back);
     for (const x of [-0.97, 0.97]) {
-      const side = box(0.06, 1.5, 0.9, frameColor, { metalness: 0.3, roughness: 0.6 });
-      side.position.set(x, 0.75, 0);
+      const side = box(0.06, 1.3, 0.9, frameColor, { metalness: 0.3, roughness: 0.6 });
+      side.position.set(x, 0.65, 0);
       g.add(side);
     }
-    const levels = [0.45, 1.0];
+    const levels = [0.4, 0.9];
     for (let i = 0; i < rows; i++) {
-      const y = levels[i] ?? 1.3;
+      const y = levels[i] ?? 1.2;
       const board = box(1.9, 0.05, 0.86, shade(frameColor, 0.85), { metalness: 0.2 });
       board.position.set(0, y, 0);
       g.add(board);
@@ -435,21 +435,21 @@ export function makeShelf(style: ShelfStyle, accent: number, capacity: number): 
     kick.position.set(0, 0.06, 0);
     g.add(kick);
   } else if (style === 'fridge') {
-    const body = box(2, 1.9, 0.9, 0xe4ebf1, { roughness: 0.5, metalness: 0.1 });
-    body.position.set(0, 0.95, -0.03);
+    const body = box(2, 1.6, 0.9, 0xe4ebf1, { roughness: 0.5, metalness: 0.1 });
+    body.position.set(0, 0.8, -0.03);
     g.add(body);
-    const inner = box(1.84, 1.6, 0.76, 0xcfe4f5, { flat: false });
-    inner.position.set(0, 0.95, 0.03);
+    const inner = box(1.84, 1.3, 0.76, 0xcfe4f5, { flat: false });
+    inner.position.set(0, 0.8, 0.03);
     g.add(inner);
-    const glass = new THREE.Mesh(new THREE.BoxGeometry(1.84, 1.6, 0.04), mat(0x9fd3ff, { flat: false, transparent: true, opacity: 0.32, roughness: 0.05, metalness: 0.2 }));
-    glass.position.set(0, 0.95, 0.44);
+    const glass = new THREE.Mesh(new THREE.BoxGeometry(1.84, 1.3, 0.04), mat(0x9fd3ff, { flat: false, transparent: true, opacity: 0.32, roughness: 0.05, metalness: 0.2 }));
+    glass.position.set(0, 0.8, 0.44);
     g.add(glass);
     const strip = new THREE.Mesh(new THREE.BoxGeometry(1.9, 0.12, 0.1), mat(accent, { emissive: accent, flat: false }));
-    strip.position.set(0, 1.82, 0.44);
+    strip.position.set(0, 1.52, 0.44);
     g.add(strip);
-    const levels = [0.45, 1.05];
+    const levels = [0.4, 0.95];
     for (let i = 0; i < rows; i++) {
-      const y = levels[i] ?? 1.5;
+      const y = levels[i] ?? 1.3;
       const board = box(1.8, 0.04, 0.7, 0xb9c8d4, { metalness: 0.3 });
       board.position.set(0, y, 0);
       g.add(board);
@@ -550,6 +550,20 @@ export function makeItem(p: ProductDef): THREE.Group {
   stripe.position.y = 0.12;
   g.add(body, stripe);
   return g;
+}
+
+// Give every mesh in a group its own transparent material so the whole thing can fade out.
+export function makeFadeable(group: THREE.Object3D): THREE.Material[] {
+  const mats: THREE.Material[] = [];
+  group.traverse((o) => {
+    const m = o as THREE.Mesh;
+    if (!m.isMesh || (o as THREE.Sprite).isSprite) return;
+    const own = (m.material as THREE.Material).clone();
+    own.transparent = true;
+    m.material = own;
+    mats.push(own);
+  });
+  return mats;
 }
 
 export function disposeGroup(obj: THREE.Object3D): void {
