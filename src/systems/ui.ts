@@ -38,11 +38,29 @@ export const ui = {
     if (el.textContent !== text) el.textContent = text;
     el.classList.remove('hidden');
   },
-  setButtonAttention(id: 'order' | 'build' | 'elevator', on: boolean): void {
+  setButtonAttention(id: 'order' | 'build' | 'elevator' | 'player', on: boolean): void {
     $('btn-' + id).classList.toggle('attention', on);
   },
-  onButton(id: 'order' | 'build' | 'elevator', fn: () => void): void {
+  onButton(id: 'order' | 'build' | 'elevator' | 'player' | 'pause', fn: () => void): void {
     $('btn-' + id).onclick = fn;
+  },
+  setStamina(frac: number, tired: boolean): void {
+    const el = $('hud-stamina');
+    el.style.width = Math.round(Math.max(0, Math.min(1, frac)) * 100) + '%';
+    el.classList.toggle('tired', tired);
+  },
+  showSprintButton(show: boolean): void {
+    $('btn-sprint').classList.toggle('hidden', !show);
+  },
+  sprintButton(): HTMLButtonElement {
+    return $('btn-sprint') as HTMLButtonElement;
+  },
+  toast(text: string): void {
+    const el = $('toast');
+    el.textContent = text;
+    el.classList.remove('hidden');
+    clearTimeout((el as unknown as { _t?: number })._t);
+    (el as unknown as { _t?: number })._t = window.setTimeout(() => el.classList.add('hidden'), 1400);
   },
 
   panelOpen(): boolean {

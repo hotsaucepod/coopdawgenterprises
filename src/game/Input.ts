@@ -6,6 +6,7 @@ export class Input {
   vec = { x: 0, y: 0 };
   private base: HTMLDivElement;
   private knob: HTMLDivElement;
+  private sprintHeld = false;
 
   constructor(container: HTMLElement) {
     window.addEventListener('keydown', (e) => {
@@ -13,7 +14,7 @@ export class Input {
       if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' '].includes(e.key.toLowerCase())) e.preventDefault();
     });
     window.addEventListener('keyup', (e) => this.keys.delete(e.key.toLowerCase()));
-    window.addEventListener('blur', () => this.keys.clear());
+    window.addEventListener('blur', () => { this.keys.clear(); this.sprintHeld = false; });
 
     this.base = document.createElement('div');
     this.base.className = 'joy-base hidden';
@@ -54,6 +55,19 @@ export class Input {
     };
     container.addEventListener('pointerup', release);
     container.addEventListener('pointercancel', release);
+  }
+
+  bindSprintButton(btn: HTMLElement): void {
+    const on = (e: Event) => { e.preventDefault(); this.sprintHeld = true; btn.classList.add('active'); };
+    const off = () => { this.sprintHeld = false; btn.classList.remove('active'); };
+    btn.addEventListener('pointerdown', on);
+    btn.addEventListener('pointerup', off);
+    btn.addEventListener('pointercancel', off);
+    btn.addEventListener('pointerleave', off);
+  }
+
+  sprinting(): boolean {
+    return this.sprintHeld || this.keys.has('shift');
   }
 
   // movement direction, x right, y down (screen space), length <= 1

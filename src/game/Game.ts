@@ -2,14 +2,15 @@ import * as THREE from 'three';
 import {
   COLS, ROWS, FLOORS, FloorDef, FixtureDef, ProductDef, floorById, productById,
   SHELF_SLOTS, STORAGE_ROWS, COUNTER_1, COUNTER_2, QUEUE_TILES, ELEVATOR, PLAYER_START,
-  UPGRADES, CARRY_BY_LEVEL, SPEED_BY_LEVEL, RATING_CLOSED_BELOW, RATING_PER_SALE,
+  UPGRADES, CARRY_BY_LEVEL, SPEED_BY_LEVEL, STAMINA_BY_LEVEL, PATIENCE_MULT_BY_LEVEL, SPRINT_MULT,
+  RATING_CLOSED_BELOW, RATING_PER_SALE,
 } from '../data/floors';
 import { SaveData, FloorSave, loadSave, writeSave, floorSave, clearSave, newSave } from '../systems/save';
 import { findPath, Pt } from '../systems/pathfinding';
 import { ui, fmtMoney } from '../systems/ui';
 import { Renderer3D } from '../render/Renderer3D';
 import {
-  buildWorld, makeShelf, shelfStyleFor, makeCounter, makeCrate, makePad, makeCashierMat, makeItem, tileAt, isSolidTile, disposeGroup,
+  buildWorld, makeShelf, shelfStyleFor, makeCounter, makeCrate, makePad, makeCashierMat, makeItem, tileAt, isSolidTile, disposeGroup, FadeWall, WALL_H,
 } from '../render/builders';
 import { makeTextSprite, updateTextSprite } from '../render/text';
 import { Character } from '../render/Character';
@@ -37,7 +38,7 @@ interface CrateView {
   col: number; row: number;
   group: THREE.Group;
   count: THREE.Sprite;
-  sample: THREE.Group;
+  samples: THREE.Group[];
 }
 interface FloatText { sprite: THREE.Sprite; life: number; }
 interface Pop { obj: THREE.Object3D; t: number; }
@@ -53,10 +54,17 @@ export class Game {
   fs!: FloorSave;
 
   private world: THREE.Group | null = null;
+  private fadeWalls: FadeWall[] = [];
   private dynamic = new THREE.Group();     // everything that changes per floor besides the world
   player!: Character;
-  carrying: { productId: string; count: number } | null = null;
+  hand: string[] = [];                     // product ids the player is carrying, bottom to top
   private pickTimer = 0;
+  stamina = 0;
+  private staminaRest = 0;
+  private sprinting = false;
+  paused = false;
+  private exhausted = false;
+  private noRender = false;
 
   private playerSolid = new Set<string>();
   private customerBlocked = new Set<string>();
@@ -82,7 +90,7 @@ export class Game {
   private padDwell = 0;
   private closed = false;
   private lastTime = 0;
-  private currentPanel: 'order' | 'build' | 'elevator' | null = null;
+  private currentPanel: 'order' | 'build' | 'elevator' | 'player' | null = null;
   private water: THREE.Object3D | null = null;
   private time = 0;
   private fpsSamples = 0;
@@ -95,11 +103,17 @@ export class Game {
     this.r3d.scene.add(this.dynamic);
     ui.onButton('order', () => this.openOrderPanel());
     ui.onButton('build', () => this.openBuildPanel());
+    ui.onButton('player', () => this.openPlayerPanel());
     ui.onButton('elevator', () => this.openElevatorPanel());
+    ui.onButton('pause', () => this.openPauseMenu());
+    this.input.bindSprintButton(ui.sprintButton());
+    ui.showSprintButton(this.r3d.isMobile || 'ontouchstart' in window);
+    window.addEventListener('keydown', (e) => { if (e.key === 'Escape' || e.key.toLowerCase() === 'p') this.openPauseMenu(); });
     (window as unknown as { __mallTycoon?: Game }).__mallTycoon = this;
     let lowFx = false;
     try { lowFx = location.search.includes('low') || localStorage.getItem('mall-tycoon-lowfx') === '1'; } catch { /* ignore */ }
     if (lowFx) { this.r3d.setQuality('low'); this.fpsChecked = true; }
+    try { this.noRender = location.search.includes('norender'); } catch { /* ignore */ }
     requestAnimationFrame((t) => this.frame(t));
   }
 
@@ -138,8 +152,9 @@ export class Game {
     this.crates.clear();
     this.floats = [];
     this.pops = [];
-    this.carrying = null;
+    this.hand = [];
     this.closed = false;
+    this.paused = false;
     this.onElevator = false;
     this.padUnderPlayer = null;
     this.padDwell = 0;
@@ -152,7 +167,9 @@ export class Game {
     this.save.currentFloor = floorId;
     this.fs = floorSave(this.save, floorId);
 
-    this.world = buildWorld(this.floor);
+    const world = buildWorld(this.floor);
+    this.world = world.group;
+    this.fadeWalls = world.fadeWalls;
     this.r3d.scene.add(this.world);
     this.water = this.world.getObjectByName('water') ?? null;
     this.buildBlockedSets();
@@ -162,9 +179,12 @@ export class Game {
       else this.placePad(f);
     }
     this.buildPlayer();
-    for (let i = 0; i < 5; i++) this.walkers.push(new Walker(this, i + 3, this.randomConcourseTile()));
+    this.hand = [...(this.fs.hand ?? [])].filter((id) => this.floor.products.some((p) => p.id === id));
+    this.attachHand();
+    this.stamina = this.staminaMax();
+    for (let i = 0; i < 8; i++) this.walkers.push(new Walker(this, i + 3, this.randomConcourseTile()));
     this.refreshHud();
-    writeSave(this.save);
+    this.persist();
   }
 
   private buildBlockedSets(): void {
@@ -213,18 +233,25 @@ export class Game {
       const row = STORAGE_ROWS.top;
       const group = makeCrate();
       group.position.set(col + 0.5, 0, row + 0.5);
-      const sample = makeItem(p);
-      sample.position.set(0, 0.68, 0);
-      sample.scale.setScalar(1.4);
-      group.add(sample);
+      // up to four sample items stacked in the crate: more stock, taller pile
+      const samples: THREE.Group[] = [];
+      const spots = [[-0.18, 0.62, -0.1], [0.18, 0.62, 0.12], [-0.05, 0.86, 0.02], [0.1, 1.1, -0.05]];
+      for (const [x, y, z] of spots) {
+        const it = makeItem(p);
+        it.position.set(x, y, z);
+        it.scale.setScalar(1.35);
+        it.rotation.y = Math.random() * 0.6;
+        group.add(it);
+        samples.push(it);
+      }
       const count = makeTextSprite('0', { size: 40, bg: 'rgba(0,0,0,0.7)', color: '#ffffff', height: 0.36 });
-      count.position.set(0, 1.35, 0.1);
+      count.position.set(0.3, 1.5, 0.2);
       group.add(count);
-      const name = makeTextSprite(p.name, { size: 28, color: '#ffffff', height: 0.3 });
-      name.position.set(0, 1.05, 0.5);
+      const name = makeTextSprite(p.name, { size: 30, color: '#ffffff', bg: '#' + p.color.toString(16).padStart(6, '0') + 'cc', height: 0.32 });
+      name.position.set(0, 0.3, 0.62);
       group.add(name);
       this.dynamic.add(group);
-      this.crates.set(p.id, { productId: p.id, col, row, group, count, sample });
+      this.crates.set(p.id, { productId: p.id, col, row, group, count, samples });
       this.refreshCrate(p.id);
     });
   }
@@ -430,6 +457,36 @@ export class Game {
     return this.concourseTiles[Math.floor(Math.random() * this.concourseTiles.length)];
   }
 
+  staminaMax(): number {
+    return STAMINA_BY_LEVEL[this.save.upgrades.endurance ?? 0];
+  }
+
+  patienceMs(): number {
+    return this.floor.patienceMs * PATIENCE_MULT_BY_LEVEL[this.save.upgrades.charm ?? 0];
+  }
+
+  private persist(): void {
+    this.fs.hand = [...this.hand];
+    writeSave(this.save);
+  }
+
+  // what the player holds, shown as a mixed stack above their head
+  private attachHand(): void {
+    let stack = this.player.group.getObjectByName('carried') as THREE.Group | undefined;
+    if (!stack) {
+      stack = new THREE.Group();
+      stack.name = 'carried';
+      this.player.group.add(stack);
+    }
+    while (stack.children.length) stack.remove(stack.children[0]);
+    this.hand.slice(0, 10).forEach((id, i) => {
+      const it = makeItem(this.product(id));
+      it.position.set(0, 1.25 + i * 0.25, 0.42);
+      stack.add(it);
+    });
+    this.player.setCarrying(this.hand.length > 0);
+  }
+
   // stack of carried items shown above a character's head
   attachCarried(ch: Character, count: number, productId: string | null): void {
     let stack = ch.group.getObjectByName('carried') as THREE.Group | undefined;
@@ -534,9 +591,9 @@ export class Game {
     writeSave(this.save);
   }
 
-  private buyUpgrade(id: 'speed' | 'carry'): void {
+  private buyUpgrade(id: 'speed' | 'carry' | 'endurance' | 'charm'): void {
     const def = UPGRADES.find((u) => u.id === id)!;
-    const level = this.save.upgrades[id];
+    const level = this.save.upgrades[id] ?? 0;
     if (level >= def.maxLevel) return;
     const cost = def.costs[level];
     if (this.save.money < cost) return;
@@ -585,6 +642,8 @@ export class Game {
           this.save.rating = 50;
           this.fs.crate = {};
           this.fs.shelf = {};
+          this.hand = [];
+          this.attachHand();
           for (const s of this.shelves.keys()) this.refreshShelf(s);
           for (const c of this.crates.keys()) this.refreshCrate(c);
           this.closed = false;
@@ -607,7 +666,7 @@ export class Game {
   }
 
   goToFloor(id: string): void {
-    writeSave(this.save);
+    this.persist();
     this.loadFloor(id);
   }
 
@@ -625,8 +684,9 @@ export class Game {
     const c = this.crates.get(productId);
     if (!c) return;
     const n = this.crateStock(productId);
-    updateTextSprite(c.count, String(n), { size: 40, bg: 'rgba(0,0,0,0.7)', color: '#ffffff', height: 0.36 });
-    c.sample.visible = n > 0;
+    updateTextSprite(c.count, String(n), { size: 40, bg: n > 0 ? 'rgba(0,0,0,0.7)' : 'rgba(180,40,40,0.85)', color: '#ffffff', height: 0.36 });
+    const shown = n <= 0 ? 0 : n < 4 ? 1 : n < 8 ? 2 : n < 12 ? 3 : 4;
+    c.samples.forEach((it, i) => { it.visible = i < shown; });
     if (ui.panelOpen()) this.refreshOpenPanel();
   }
 
@@ -642,6 +702,8 @@ export class Game {
     const canOrder = this.floor.products.some((p) => this.hasShelfFor(p.id) && this.save.money >= p.caseCost && this.crateStock(p.id) === 0);
     ui.setButtonAttention('order', canOrder);
     ui.setButtonAttention('elevator', this.fs.completed && this.save.unlockedFloors.length > 1);
+    const canUpgrade = UPGRADES.some((u) => (this.save.upgrades[u.id] ?? 0) < u.maxLevel && this.save.money >= u.costs[this.save.upgrades[u.id] ?? 0] * 3);
+    ui.setButtonAttention('player', canUpgrade);
     if (ui.panelOpen()) this.refreshOpenPanel();
   }
 
@@ -655,6 +717,7 @@ export class Game {
     if (this.currentPanel === 'order') ui.refreshPanel((b) => this.renderOrder(b));
     else if (this.currentPanel === 'build') ui.refreshPanel((b) => this.renderBuild(b));
     else if (this.currentPanel === 'elevator') ui.refreshPanel((b) => this.renderElevator(b));
+    else if (this.currentPanel === 'player') ui.refreshPanel((b) => this.renderPlayer(b));
   }
 
   private openOrderPanel(): void {
@@ -703,20 +766,48 @@ export class Game {
           : { label: 'Buy ' + fmtMoney(f.cost), disabled: this.save.money < f.cost, onClick: () => this.tryBuyInstant(f) },
       }));
     }
-    body.appendChild(ui.sectionTitle('Your skills (every floor)'));
-    for (const u of UPGRADES) {
-      const level = this.save.upgrades[u.id];
-      const maxed = level >= u.maxLevel;
-      const cost = maxed ? 0 : u.costs[level];
-      const stat = u.id === 'carry' ? `Carry ${CARRY_BY_LEVEL[level]}` : `Speed ${SPEED_BY_LEVEL[level]}`;
+    body.appendChild(ui.tip('Upgrades for you (speed, carrying, endurance, charm) are under the Me button.'));
+  }
+
+  private openPlayerPanel(): void {
+    this.currentPanel = 'player';
+    ui.openPanel('👤 Me', (b) => this.renderPlayer(b));
+  }
+
+  private renderPlayer(body: HTMLElement): void {
+    const u = this.save.upgrades;
+    const level = u.speed + u.carry + (u.endurance ?? 0) + (u.charm ?? 0);
+    const card = document.createElement('div');
+    card.className = 'me-card';
+    card.innerHTML = `<div class="me-avatar">🧑‍💼</div><div class="me-stats">
+      <div><b>Shopkeeper</b> · Level ${level}</div>
+      <div>Speed <b>${SPEED_BY_LEVEL[u.speed]}</b> · Carry <b>${CARRY_BY_LEVEL[u.carry]}</b> items</div>
+      <div>Sprint <b>${STAMINA_BY_LEVEL[u.endurance ?? 0]}s</b> · Customer patience <b>×${PATIENCE_MULT_BY_LEVEL[u.charm ?? 0]}</b></div>
+      <div>Lifetime earned <b>${fmtMoney(this.save.lifetimeEarned)}</b></div>
+    </div>`;
+    body.appendChild(card);
+    body.appendChild(ui.tip('Hold Shift (or the Sprint button) to run. Upgrades carry over to every floor.'));
+    body.appendChild(ui.sectionTitle('Upgrades'));
+    for (const def of UPGRADES) {
+      const lvl = this.save.upgrades[def.id] ?? 0;
+      const maxed = lvl >= def.maxLevel;
+      const cost = maxed ? 0 : def.costs[lvl];
+      const next = maxed ? '' : ` → ${this.upgradeStat(def.id, lvl + 1)}`;
       body.appendChild(ui.row({
-        name: `${u.name} · Lv ${level}/${u.maxLevel}`,
-        meta: `${u.desc} ${stat}.`,
+        name: `${def.name} · Lv ${lvl}/${def.maxLevel}`,
+        meta: `${def.desc} ${this.upgradeStat(def.id, lvl)}${next}`,
         button: maxed
           ? { label: 'MAX', done: true, disabled: true }
-          : { label: 'Upgrade ' + fmtMoney(cost), disabled: this.save.money < cost, onClick: () => this.buyUpgrade(u.id) },
+          : { label: 'Upgrade ' + fmtMoney(cost), disabled: this.save.money < cost, onClick: () => this.buyUpgrade(def.id) },
       }));
     }
+  }
+
+  private upgradeStat(id: 'speed' | 'carry' | 'endurance' | 'charm', lvl: number): string {
+    if (id === 'speed') return `Speed ${SPEED_BY_LEVEL[lvl]}`;
+    if (id === 'carry') return `Carry ${CARRY_BY_LEVEL[lvl]}`;
+    if (id === 'endurance') return `Sprint ${STAMINA_BY_LEVEL[lvl]}s`;
+    return `Patience ×${PATIENCE_MULT_BY_LEVEL[lvl]}`;
   }
 
   private openElevatorPanel(): void {
@@ -765,11 +856,12 @@ export class Game {
     }
     this.update(dt);
     this.r3d.follow(this.player.group.position.x, this.player.group.position.z, dt / 1000);
-    this.r3d.render();
+    if (!this.noRender) this.r3d.render();
   }
 
   private update(dt: number): void {
-    const playing = !ui.modalOpen() && document.getElementById('title') === null;
+    const playing = !ui.modalOpen() && !this.paused && document.getElementById('title') === null;
+    this.updateWallFade(dt);
     if (this.water) this.water.position.y = 0.36 + Math.sin(this.time / 600) * 0.02;
     this.updateEffects(dt);
     for (const w of this.walkers) w.update(dt);
@@ -788,8 +880,36 @@ export class Game {
     this.saveTimer += dt;
     if (this.saveTimer > 2000) {
       this.saveTimer = 0;
-      writeSave(this.save);
+      this.persist();
     }
+  }
+
+  // walls that stand between the camera and the player turn see-through
+  private updateWallFade(dt: number): void {
+    const p = this.player.group.position;
+    const k = Math.min(1, dt / 120);
+    for (const w of this.fadeWalls) {
+      const dz = w.row + 0.5 - p.z;        // positive: wall is in front of the player (toward the camera)
+      const dx = Math.abs(w.col + 0.5 - p.x);
+      const occluding = dz > 0.2 && dz < 7 && dx < 4.5;
+      const target = occluding ? 0.16 : 1;
+      const m = w.mesh.material as THREE.MeshPhysicalMaterial;
+      m.opacity += (target - m.opacity) * k;
+      w.mesh.castShadow = m.opacity > 0.6;
+    }
+    void WALL_H;
+  }
+
+  // ---------------------------------------------------------------- pause / save
+  openPauseMenu(): void {
+    if (ui.modalOpen() || document.getElementById('title')) return;
+    this.paused = true;
+    ui.closePanel();
+    ui.showModal('⏸ Paused', `${this.floor.name} · ${fmtMoney(this.save.money)}\nYour game auto-saves every couple of seconds. You can also save right now.`, [
+      { label: 'Resume', onClick: () => { this.paused = false; } },
+      { label: '💾 Save game', style: 'secondary', onClick: () => { this.persist(); ui.toast('Saved!'); this.paused = false; } },
+      { label: 'Save & quit to title', style: 'danger', onClick: () => { this.persist(); this.paused = false; this.showTitle(); } },
+    ]);
   }
 
   private updateEffects(dt: number): void {
@@ -812,10 +932,24 @@ export class Game {
 
   private updatePlayer(dt: number): void {
     this.unstickPlayer();
-    const speed = SPEED_BY_LEVEL[this.save.upgrades.speed];
     const d = this.input.direction();
     const pos = this.player.group.position;
     const moving = Math.hypot(d.x, d.y) > 0.01;
+    // sprinting drains stamina; it refills after a short rest
+    const wantSprint = this.input.sprinting() && moving && this.stamina > 0 && !this.exhausted;
+    const max = this.staminaMax();
+    if (wantSprint) {
+      this.stamina = Math.max(0, this.stamina - dt / 1000);
+      this.staminaRest = 0;
+      if (this.stamina <= 0) this.exhausted = true;
+    } else {
+      this.staminaRest += dt;
+      if (this.staminaRest > 700) this.stamina = Math.min(max, this.stamina + (dt / 1000) * max * 0.3);
+      if (this.exhausted && this.stamina > max * 0.3) this.exhausted = false;
+    }
+    this.sprinting = wantSprint;
+    ui.setStamina(this.stamina / max, this.exhausted);
+    const speed = SPEED_BY_LEVEL[this.save.upgrades.speed] * (wantSprint ? SPRINT_MULT : 1);
     if (moving) {
       const step = speed * dt / 1000;
       this.moveAxis(pos, d.x * step, 0);
@@ -823,7 +957,7 @@ export class Game {
       this.player.face(d.x, d.y);
     }
     this.player.setWalking(moving);
-    this.player.animate(dt / 1000);
+    this.player.animate(dt / 1000 * (this.sprinting ? 1.5 : 1));
   }
 
   private moveAxis(pos: THREE.Vector3, dx: number, dz: number): void {
@@ -847,11 +981,13 @@ export class Game {
   // If something solid appeared where the player stands (a freshly bought counter or shelf), step out to the nearest free tile.
   private unstickPlayer(): void {
     const pos = this.player.group.position;
+    // a touch smaller than the collision radius, so brushing against a crate never counts as being stuck inside it
+    const R = PLAYER_R - 0.05;
     const overlaps = (x: number, z: number): boolean => {
-      const minC = Math.floor(x - PLAYER_R);
-      const maxC = Math.floor(x + PLAYER_R);
-      const minR = Math.floor(z - PLAYER_R);
-      const maxR = Math.floor(z + PLAYER_R);
+      const minC = Math.floor(x - R);
+      const maxC = Math.floor(x + R);
+      const minR = Math.floor(z - R);
+      const maxR = Math.floor(z + R);
       for (let r = minR; r <= maxR; r++) for (let c = minC; c <= maxC; c++) if (this.playerSolid.has(key(c, r))) return true;
       return false;
     };
@@ -910,31 +1046,30 @@ export class Game {
 
     if (this.pickTimer > 0) return;
 
-    // crates: pick up
-    for (const c of this.crates.values()) {
-      const dist = Math.hypot(p.x - (c.col + 0.5), p.z - (c.row + 0.5));
-      if (dist > 1.1) continue;
-      const have = this.carrying?.count ?? 0;
-      if (have >= carryCap) continue;
-      if (this.carrying && this.carrying.productId !== c.productId) continue;
-      if (this.crateStock(c.productId) <= 0) continue;
-      this.takeFromCrate(c.productId);
-      this.carrying = { productId: c.productId, count: have + 1 };
-      this.attachCarried(this.player, this.carrying.count, c.productId);
-      this.pickTimer = 160;
-      return;
+    // crates: pick up (any mix of products, up to your carry limit)
+    if (this.hand.length < carryCap) {
+      for (const c of this.crates.values()) {
+        const dist = Math.hypot(p.x - (c.col + 0.5), p.z - (c.row + 0.5));
+        if (dist > 1.15) continue;
+        if (this.crateStock(c.productId) <= 0) continue;
+        this.takeFromCrate(c.productId);
+        this.hand.push(c.productId);
+        this.attachHand();
+        this.pickTimer = 160;
+        return;
+      }
     }
 
-    // shelves: put down
-    if (this.carrying) {
+    // shelves: put down whatever in your hands belongs on this shelf
+    if (this.hand.length) {
       for (const s of this.shelves.values()) {
-        if (s.def.productId !== this.carrying.productId) continue;
+        const idx = this.hand.lastIndexOf(s.def.productId!);
+        if (idx === -1) continue;
         const reach = 0.55;
         if (p.x < s.col - reach || p.x > s.col + s.w + reach || p.z < s.row - reach || p.z > s.row + s.h + reach) continue;
-        if (this.putOnShelf(s.def.id, this.carrying.productId)) {
-          this.carrying.count -= 1;
-          if (this.carrying.count <= 0) this.carrying = null;
-          this.attachCarried(this.player, this.carrying?.count ?? 0, this.carrying?.productId ?? null);
+        if (this.putOnShelf(s.def.id, s.def.productId!)) {
+          this.hand.splice(idx, 1);
+          this.attachHand();
           this.pickTimer = 160;
           return;
         }
@@ -951,7 +1086,7 @@ export class Game {
 
   private updateCustomers(dt: number): void {
     const hasCounter = this.fs.purchased.includes('counter');
-    const maxCustomers = 7 + this.registerCount() * 2;
+    const maxCustomers = 8 + this.registerCount() * 2;
     const anyStock = [...this.shelves.keys()].some((id) => this.shelfStock(id) > 0);
     if (hasCounter && anyStock && this.customers.length < maxCustomers) {
       this.spawnTimer -= dt;
@@ -1014,9 +1149,9 @@ export class Game {
     let hint: string | null = null;
     if (!hasCounter) hint = 'Stand on the glowing pad near the front of your store to buy a Checkout Counter';
     else if (this.shelves.size === 0) hint = 'Stand on a glowing pad on the sales floor to buy a shelf';
-    else if (this.carrying) {
-      const p = this.product(this.carrying.productId);
-      hint = `Carrying ${this.carrying.count} ${p.name} · walk to the ${p.name} shelf`;
+    else if (this.hand.length) {
+      const names = [...new Set(this.hand)].map((id) => this.product(id).name);
+      hint = `Carrying ${this.hand.length}: ${names.join(', ')} · walk to the matching shelves`;
     } else if (waiting > 0 && !cashierHired && !this.playerAtCounter()) hint = `${waiting} customer${waiting > 1 ? 's' : ''} waiting · stand behind the counter!`;
     else if (!this.stocker && [...this.crates.values()].some((c) => this.crateStock(c.productId) > 0 && !this.shelfFullFor(c.productId))) hint = 'Grab items from the crates in the storage room at the back';
     else if ([...this.shelves.values()].every((s) => this.shelfStock(s.def.id) === 0)) hint = 'Shelves are empty · tap Order to buy stock';

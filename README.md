@@ -4,8 +4,11 @@ A 3D store-running game seen from above. You run a store inside an open mall flo
 
 ## Play it
 
-- **Phone:** drag anywhere on the store to walk. Walk into a crate to pick items up, walk into the matching shelf to put them down.
-- **Computer:** WASD or the arrow keys.
+- **Phone:** drag anywhere on the store to walk. Hold the Sprint button to run. Walk into a crate to pick items up (you can carry a mix), walk into the matching shelf to put them down.
+- **Computer:** WASD or the arrow keys. Hold Shift to sprint. P or Escape pauses.
+- **Stamina:** sprinting drains the bar under your money. It refills when you slow down. Endurance upgrades make it longer.
+- **Pause:** the ⏸ button pauses, saves on demand, or quits to the title. The game also auto-saves every couple of seconds.
+- **Me:** upgrade your shopkeeper: speed, carrying, endurance, and charm (customers wait longer).
 - **Buy pads:** stand on a glowing pad for a moment to buy that shelf or counter (only when you can afford it).
 - **Order:** buys a case of a product. It shows up in the storage room at the top.
 - **Build:** buy shelves, hire a cashier or a stocker, and upgrade your speed and how much you can carry.
@@ -64,7 +67,10 @@ Everything about the floors is data in `src/data/floors.ts`: store names, produc
 ## Floors
 
 1. Fresh Basket Market (grocery)
-2. Toy Tower
-3. Sport Zone
-4. Gizmo Galaxy (electronics)
-5. Sky Food Court
+2. Thread Theory (clothing)
+3. Toy Tower
+4. Sport Zone
+5. Gizmo Galaxy (electronics)
+6. Sky Food Court
+
+Each floor has 12 products, a counter, a second register, a cashier and a stocker to unlock.

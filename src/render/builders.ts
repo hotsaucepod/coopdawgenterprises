@@ -83,7 +83,7 @@ export function tileAt(col: number, row: number): string {
 }
 
 export function isSolidTile(ch: string): boolean {
-  return ch === '#' || ch === 'E' || ch === 'F' || ch === 'B' || ch === 'P';
+  return ch === '#' || ch === 'E' || ch === 'F' || ch === 'B' || ch === 'P' || ch === 'K';
 }
 
 function shade(color: number, k: number): number {
@@ -93,8 +93,13 @@ function shade(color: number, k: number): number {
 }
 
 // ---------------------------------------------------------------- static world
-export function buildWorld(floor: FloorDef): THREE.Group {
+export interface FadeWall { mesh: THREE.Mesh; col: number; row: number; }
+
+export interface World { group: THREE.Group; fadeWalls: FadeWall[]; }
+
+export function buildWorld(floor: FloorDef): World {
   const g = new THREE.Group();
+  const fadeWalls: FadeWall[] = [];
 
   // the ground the whole mall sits on, and a tall backdrop so the camera never sees the void
   const ground = new THREE.Mesh(new THREE.PlaneGeometry(400, 400), mat(0x9fd3a6, { roughness: 0.9, clearcoat: 0 }));
@@ -135,6 +140,18 @@ export function buildWorld(floor: FloorDef): THREE.Group {
         // only draw wall blocks that touch something you can see
         const neighbours = [tileAt(c + 1, r), tileAt(c - 1, r), tileAt(c, r + 1), tileAt(c, r - 1)];
         if (neighbours.every((n) => n === '#' || n === 'L')) continue;
+        const south = tileAt(c, r + 1);
+        if (south !== '#' && south !== 'L' && r < ROWS - 1) {
+          // this wall can stand between the camera and the player: give it its own mesh so it can fade
+          const m = new THREE.Mesh(roundedBox(1, WALL_H, 1, 0.1), mat(floor.wallColor, { roughness: 0.5 }).clone());
+          m.material.transparent = true;
+          m.position.set(tileX(c), WALL_H / 2, tileZ(r));
+          m.castShadow = true;
+          m.receiveShadow = true;
+          g.add(m);
+          fadeWalls.push({ mesh: m, col: c, row: r });
+          continue;
+        }
         const geo = roundedBox(1, WALL_H, 1, 0.1);
         geo.translate(tileX(c), WALL_H / 2, tileZ(r));
         wallGeos.push(geo);
@@ -147,6 +164,7 @@ export function buildWorld(floor: FloorDef): THREE.Group {
       if (ch === 'F') continue; // fountain is one object, added below
       if (ch === 'B') g.add(makeBench().translateX(tileX(c)).translateZ(tileZ(r)));
       if (ch === 'P') g.add(makePlanter().translateX(tileX(c)).translateZ(tileZ(r)));
+      if (ch === 'K') g.add(makeKiosk().translateX(tileX(c)).translateZ(tileZ(r)));
       if (ch === 'X') {
         const matMesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), mat(0x7a3b3b, { flat: false }));
         matMesh.rotation.x = -Math.PI / 2;
@@ -274,9 +292,9 @@ export function buildWorld(floor: FloorDef): THREE.Group {
     g.add(s);
   }
   const storageSign = makeTextSprite('STORAGE', { size: 30, color: '#ffffff', bg: '#4a4a4a', height: 0.38 });
-  storageSign.position.set(tileX(5), 2.0, tileZ(3) + 0.1);
+  storageSign.position.set(tileX(7), 2.0, tileZ(4) + 0.1);
   g.add(storageSign);
-  return g;
+  return { group: g, fadeWalls };
 }
 
 function makeBench(): THREE.Group {
@@ -310,6 +328,29 @@ function makePlanter(): THREE.Group {
   leaves2.position.set(0.2, 1.55, 0.1);
   leaves2.castShadow = true;
   g.add(pot, soil, trunk, leaves, leaves2);
+  return g;
+}
+
+function makeKiosk(): THREE.Group {
+  const g = new THREE.Group();
+  const cart = box(1.3, 0.8, 0.8, 0xffffff);
+  cart.position.y = 0.55;
+  const skirt = box(1.32, 0.3, 0.82, 0xff6b6b);
+  skirt.position.y = 0.3;
+  for (const x of [-0.45, 0.45]) {
+    const wheel = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.16, 0.1, 16), mat(0x222222));
+    wheel.rotation.z = Math.PI / 2;
+    wheel.position.set(x, 0.16, 0.42);
+    g.add(wheel);
+  }
+  const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 1.6, 8), mat(0xdddddd, { metalness: 0.5, roughness: 0.3 }));
+  pole.position.y = 1.5;
+  const umbrella = new THREE.Mesh(new THREE.ConeGeometry(1.0, 0.45, 10), mat(0xffd166));
+  umbrella.position.y = 2.3;
+  umbrella.castShadow = true;
+  const treats = makeTextSprite('🥨 SNACKS', { size: 30, color: '#1b1f2a', bg: '#ffffff', height: 0.34 });
+  treats.position.set(0, 1.25, 0.45);
+  g.add(cart, skirt, pole, umbrella, treats);
   return g;
 }
 
@@ -462,17 +503,17 @@ export function makeCounter(): THREE.Group {
 export function makeCrate(): THREE.Group {
   const g = new THREE.Group();
   const wood = 0xc79a5b;
-  const body = box(0.86, 0.66, 0.86, wood);
-  body.position.y = 0.33;
+  const body = box(0.9, 0.6, 0.9, wood);
+  body.position.y = 0.3;
   g.add(body);
   const dark = shade(wood, 0.72);
   for (const [x, z] of [[-0.42, -0.42], [0.42, -0.42], [-0.42, 0.42], [0.42, 0.42]]) {
-    const post = box(0.08, 0.7, 0.08, dark);
-    post.position.set(x, 0.35, z);
+    const post = box(0.08, 0.64, 0.08, dark);
+    post.position.set(x, 0.32, z);
     g.add(post);
   }
-  const lip = box(0.9, 0.06, 0.9, dark);
-  lip.position.y = 0.66;
+  const lip = box(0.94, 0.06, 0.94, dark);
+  lip.position.y = 0.6;
   g.add(lip);
   return g;
 }

@@ -141,7 +141,7 @@ export class Customer {
       } else {
         if (this.state === 'shopping') {
           this.state = 'waiting';
-          this.patienceMax = this.game.floor.patienceMs;
+          this.patienceMax = this.game.patienceMs();
           this.patience = this.patienceMax;
           this.bubble.showItem(this.game.product(this.game.shelfProduct(want.fixtureId)));
         }

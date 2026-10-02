@@ -19,21 +19,27 @@
       </div>
       <div class="hud-cell center">
         <div id="hud-money" class="hud-money">$20</div>
+        <div class="stamina"><div id="hud-stamina" class="stamina-fill"></div></div>
       </div>
       <div class="hud-cell right">
         <div id="hud-stars" class="hud-stars">★★★★☆</div>
         <div id="hud-rating" class="hud-sub">Rating 70</div>
       </div>
+      <button id="btn-pause" class="icon-btn" aria-label="Pause">⏸</button>
     </header>
 
     <main id="game-container"></main>
 
     <div id="hud-hint" class="hidden"></div>
 
+    <button id="btn-sprint" class="sprint-btn hidden">🏃<span>Sprint</span></button>
+    <div id="toast" class="toast hidden"></div>
+
     <footer id="hud-bottom" class="hidden">
       <button id="btn-order" class="hud-btn">📦 Order</button>
       <button id="btn-build" class="hud-btn">🔨 Build</button>
-      <button id="btn-elevator" class="hud-btn">🛗 Elevator</button>
+      <button id="btn-player" class="hud-btn">👤 Me</button>
+      <button id="btn-elevator" class="hud-btn">🛗 Lift</button>
     </footer>
 
     <div id="panel" class="panel hidden">
