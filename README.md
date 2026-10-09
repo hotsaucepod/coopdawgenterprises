@@ -35,16 +35,33 @@ npm run preview    # serve the built game locally
 
 ## Run on your iPhone (Xcode)
 
-The `ios/` folder is a Capacitor project that wraps the built web game.
+The `ios/` folder is a Capacitor project that wraps the built web game. No CocoaPods needed; Xcode pulls Capacitor in with Swift Package Manager.
 
-On a Mac with Xcode installed:
+One-time setup on your Mac (Xcode installed, phone plugged in and trusted):
 
 ```bash
+git clone https://github.com/hotsaucepod/coopdawgenterprises.git mall-tycoon
+cd mall-tycoon
+git checkout claude/stoic-curie-ed011x
 npm install
-npm run ios        # builds the web app, copies it into ios/, opens Xcode
+npm run ios
 ```
 
-In Xcode: pick the `App` target, set your Team under Signing & Capabilities, plug in your phone, choose it as the run destination, and press Run. After every code change run `npm run ios:sync` and press Run again.
+`npm run ios` builds the game, copies it into the Xcode project, and opens Xcode. Then in Xcode:
+
+1. Click the blue **App** project in the left sidebar, then the **App** target, then **Signing & Capabilities**.
+2. Tick **Automatically manage signing** and pick your **Team** (your Apple ID).
+3. In the toolbar, change the run destination from a simulator to your iPhone.
+4. Press **Run** (the play button). The first time, your phone will ask you to trust the developer: Settings → General → VPN & Device Management → your Apple ID → Trust.
+
+After every update to the game, pull and resync, then press Run again in Xcode:
+
+```bash
+git pull
+npm run ios:sync
+```
+
+No Mac handy? Open the game link in Safari on your phone, tap Share, then **Add to Home Screen**. It gets its own icon and runs full screen.
 
 ## Change the game
 
